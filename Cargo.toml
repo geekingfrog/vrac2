@@ -1,0 +1,25 @@
+[package]
+name = "vrac"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.6.0-rc.2", features = ["form"] }
+humantime = "2.1.0"
+hyper = "0.14.20"
+parking_lot = "0.12.1"
+serde = { version = "1.0.145", features = ["derive"] }
+sqlx = { version = "0.6.2", features = ["runtime-tokio-rustls", "sqlite", "time"] }
+tera = { version = "1.17.1", features = ["builtins"] }
+thiserror = "1.0.37"
+time = { version = "0.3.15", features = ["macros"] }
+tokio = { version = "1.21.2", features = ["full"] }
+tower = "0.4.12"
+tower-http = { version="0.3.4", features = ["trace", "fs"] }
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+
+
+[[bin]]
+name = "vrac"
+path = "src/bin/vrac.rs"
