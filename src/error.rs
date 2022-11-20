@@ -14,6 +14,8 @@ pub enum AppError {
     #[error("Migration error {0}")]
     MigrationError(#[from] sqlx::migrate::MigrateError),
 
+    #[error("Upload error {0}")]
+    UploadError(#[from] axum::extract::multipart::MultipartError),
     // #[error("IO error from {1}: {0}")]
     // IOError(#[source] std::io::Error, &'static str),
     //
@@ -25,20 +27,23 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let res = match self {
             AppError::TemplateError(ref _err) => {
+                tracing::error!("Server error: {self:?}");
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
             }
             AppError::DBError(ref _err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")),
             AppError::MigrationError(ref _err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
             }
-            // AppError::IOError(_, _) => (
-            //     StatusCode::INTERNAL_SERVER_ERROR,
-            //     format!("{self:?}"),
-            // ),
-            // AppError::ParseError(err) => (
-            //     StatusCode::INTERNAL_SERVER_ERROR,
-            //     format!("Parse error: {err}")
-            // )
+            AppError::UploadError(ref _err) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
+            } // AppError::IOError(_, _) => (
+              //     StatusCode::INTERNAL_SERVER_ERROR,
+              //     format!("{self:?}"),
+              // ),
+              // AppError::ParseError(err) => (
+              //     StatusCode::INTERNAL_SERVER_ERROR,
+              //     format!("Parse error: {err}")
+              // )
         };
         res.into_response()
     }

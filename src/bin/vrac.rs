@@ -9,6 +9,7 @@ async fn main() -> Result<(), axum::BoxError> {
     state.db.migrate().await?;
     let app = build(state);
     let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+    tracing::info!("Listening on {}", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await?;

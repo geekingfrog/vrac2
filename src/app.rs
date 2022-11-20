@@ -1,3 +1,4 @@
+use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::{routing, Router};
 use tower::ServiceBuilder;
@@ -15,8 +16,16 @@ pub fn build(state: AppState) -> Router<AppState> {
             "/gen",
             routing::get(handlers::gen::get_token).post(handlers::gen::create_token),
         )
-        .route("/f/:path", routing::get(handlers::upload::get_upload_form))
-        .nest(
+        .merge(
+            Router::inherit_state()
+                .route(
+                    "/f/:path",
+                    routing::get(handlers::upload::get_upload_form)
+                        .post(handlers::upload::post_upload_form),
+                )
+                .layer(DefaultBodyLimit::max(usize::MAX)),
+        )
+        .nest_service(
             "/static",
             routing::get_service(ServeDir::new("static")).handle_error(
                 |err: std::io::Error| async move {

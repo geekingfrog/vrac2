@@ -1,5 +1,6 @@
-use axum::extract::Path;
+use axum::extract::{Multipart, Path};
 use axum::{extract::State, response::Html};
+use axum_flash::IncomingFlashes;
 use humantime::format_duration;
 use time::OffsetDateTime;
 
@@ -9,9 +10,14 @@ use crate::state::AppState;
 
 pub(crate) async fn get_upload_form(
     state: State<AppState>,
+    incoming_flashes: IncomingFlashes,
     Path(tok_path): Path<String>,
-) -> Result<Html<String>> {
+) -> Result<(IncomingFlashes, Html<String>)> {
     let now = OffsetDateTime::now_utc();
+    for (level, flash) in &incoming_flashes {
+        tracing::info!("FLASH: [{level:?}] {flash:?}");
+    }
+
     match state.db.get_valid_token(&tok_path).await? {
         None => {
             todo!()
@@ -28,11 +34,36 @@ pub(crate) async fn get_upload_form(
                 ctx.insert("content_duration", &format_duration(d).to_string());
             }
 
-            Ok(state
-                .templates
-                .read()
-                .render("upload_form.html", &ctx)?
-                .into())
+            Ok((
+                incoming_flashes,
+                state
+                    .templates
+                    .read()
+                    .render("upload_form.html", &ctx)?
+                    .into(),
+            ))
         }
     }
+}
+
+pub(crate) async fn post_upload_form(mut multipart: Multipart) -> Result<()> {
+    while let Some(mut field) = multipart.next_field().await? {
+        tracing::info!(
+            "got a new field here {:?} of type {:?}",
+            field.name(),
+            field.content_type()
+        );
+
+        let mut total = 0;
+        while let Some(chunk) = field.chunk().await? {
+            total += chunk.len() / 1024;
+            tracing::info!("{:04}kib / {:08}kib", chunk.len() / 1024, total);
+            // tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+    // // TODO: maybe use https://docs.rs/axum/0.6.0-rc.4/axum/extract/struct.OriginalUri.html
+    // // instead of reconstructing the path here
+    // let redir = Redirect::temporary(&format!("/f/{}", tok_path));
+    tracing::info!("done with upload");
+    Ok(())
 }

@@ -1,5 +1,7 @@
+use axum::response::Redirect;
 use axum::Form;
 use axum::{extract::State, response::Html};
+use axum_flash::{Flash, IncomingFlashes, Level};
 use serde::{Deserialize, Deserializer};
 use std::result::Result as StdResult;
 use std::time::Duration;
@@ -8,46 +10,76 @@ use time::OffsetDateTime;
 use crate::error::Result;
 use crate::state::AppState;
 
-#[derive(Debug, serde::Deserialize)]
+// need the serialize_with bits to ensure we serialize into a string.
+// because a browser will send these fields as string, this ensure consistent
+// serialization. There may be a way to accept both an integer and a string, but
+// I don't know how.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct GenTokenForm {
     pub(crate) path: String,
-    #[serde(rename = "max-size-mib", deserialize_with = "deserialize_sentinel")]
+    #[serde(
+        rename = "max-size-mib",
+        deserialize_with = "deserialize_sentinel",
+        serialize_with = "serialize_opt_str"
+    )]
     max_size_mib: Option<i64>,
 
-    #[serde(rename = "content-expires", deserialize_with = "deserialize_sentinel")]
+    #[serde(
+        rename = "content-expires",
+        deserialize_with = "deserialize_sentinel",
+        serialize_with = "serialize_opt_str"
+    )]
     content_expires_after_hours: Option<i64>,
     #[serde(rename = "token-valid-for-hour")]
     token_valid_for_hour: u64,
 }
 
-#[tracing::instrument(skip(state), level = "debug")]
+#[tracing::instrument(skip(flashes, state), level = "debug")]
 pub(crate) async fn get_token(
+    flashes: IncomingFlashes,
     State(state): State<AppState>,
-) -> Result<Html<String>> {
-    let ctx = tera::Context::new();
-    Ok(state
-        .templates
-        .read()
-        .render("get_gen_token.html", &ctx)?
-        .into())
+) -> Result<(IncomingFlashes, Html<String>)> {
+    let mut ctx = tera::Context::new();
+    for (level, msg) in &flashes {
+        match level {
+            Level::Success => ctx.insert("message", msg),
+            Level::Error => ctx.insert("error", msg),
+            Level::Info => match serde_json::from_str(msg) {
+                Err(err) => {
+                    tracing::error!("message: {msg}");
+                    tracing::error!("invalid form in flash {err:?}");
+                }
+                Ok::<GenTokenForm, _>(x) => {
+                    ctx.insert("max_size_mib", &x.max_size_mib);
+                }
+            },
+            _ => (),
+        }
+    }
+
+    Ok((
+        flashes,
+        state
+            .templates
+            .read()
+            .render("get_gen_token.html", &ctx)?
+            .into(),
+    ))
 }
 
 #[tracing::instrument(skip(state, form), level = "debug")]
 pub(crate) async fn create_token(
     State(state): State<AppState>,
+    flash: Flash,
     form: StdResult<Form<GenTokenForm>, axum::extract::rejection::FormRejection>,
-) -> Result<Html<String>> {
+) -> Result<(Flash, Redirect)> {
+
     let form = match form {
-        Ok(f) => f,
+        Ok(Form(f)) => f,
         Err(err) => {
-            let mut ctx = tera::Context::new();
             tracing::error!("Invalid form submitted {err:?}");
-            ctx.insert("error", &format!("Invalid request submitted: {err:?}"));
-            return Ok(state
-                .templates
-                .read()
-                .render("get_gen_token.html", &ctx)?
-                .into());
+            let flash = flash.error(&format!("Invalid request submitted: {err:?}"));
+            return Ok((flash, Redirect::to("/gen")));
         }
     };
 
@@ -61,21 +93,25 @@ pub(crate) async fn create_token(
     };
 
     let r = state.db.create_token(ct).await?;
-
-    let mut ctx = tera::Context::new();
+    tracing::info!(
+        "serialized form is: {}",
+        serde_json::to_string(&form).unwrap()
+    );
 
     match r {
-        Err(crate::db::TokenError::AlreadyExist) => {
-            ctx.insert("error", "a valid token already exist for this path")
-        }
-        _ => ctx.insert("message", "token created"),
-    };
-
-    Ok(state
-        .templates
-        .read()
-        .render("get_gen_token.html", &ctx)?
-        .into())
+        // TODO if the token already exists, serialize the form (somehow), store
+        // it in the flash so that the form can be prefilled after the redirect.
+        Err(crate::db::TokenError::AlreadyExist) => Ok((
+            flash
+                .error("A valid token already exist for this path.")
+                .info(serde_json::to_string(&form).unwrap()),
+            Redirect::to("/gen"),
+        )),
+        Ok(tok) => Ok((
+            flash.success("Token created."),
+            Redirect::to(&format!("/f/{}", tok.path)),
+        )),
+    }
 }
 
 // See:
@@ -100,7 +136,7 @@ where
             }
         }
         Err(e) => {
-            eprintln!("got err: {:?}", e);
+            tracing::error!("got error while deserializing: {:?}", e);
             Err(e)
         }
     }
@@ -131,5 +167,16 @@ where
             .map(Some)
             .map_err(|_| serde::de::Error::custom("could not parse string")),
         None => Ok(None),
+    }
+}
+
+fn serialize_opt_str<F, S>(field: &Option<F>, s: S) -> std::result::Result<S::Ok, S::Error>
+where
+    F: ToString,
+    S: serde::Serializer,
+{
+    match field {
+        Some(v) => s.serialize_some(&v.to_string()),
+        None => s.serialize_none(),
     }
 }
