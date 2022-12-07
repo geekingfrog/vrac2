@@ -1,11 +1,9 @@
 // pub(crate) type Pool = sqlx
 
-use parking_lot::RwLock;
 use sqlx::types::time::OffsetDateTime;
 use sqlx::Transaction;
 use sqlx::{sqlite::SqlitePoolOptions, Executor, Pool, Row, Sqlite};
 use std::result::Result as StdResult;
-use std::sync::Arc;
 
 use crate::error::Result;
 
