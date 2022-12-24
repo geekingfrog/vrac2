@@ -50,7 +50,7 @@ pub(crate) async fn get_token(
                     tracing::error!("invalid form in flash {err:?}");
                 }
                 Ok::<GenTokenForm, _>(x) => {
-                    ctx.insert("max_size_mib", &x.max_size_mib);
+                    ctx.insert("full_form", &x);
                 }
             },
             _ => (),
@@ -73,7 +73,6 @@ pub(crate) async fn create_token(
     flash: Flash,
     form: StdResult<Form<GenTokenForm>, axum::extract::rejection::FormRejection>,
 ) -> Result<(Flash, Redirect)> {
-
     let form = match form {
         Ok(Form(f)) => f,
         Err(err) => {
