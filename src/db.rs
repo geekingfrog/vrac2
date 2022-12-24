@@ -5,7 +5,7 @@ use sqlx::Transaction;
 use sqlx::{sqlite::SqlitePoolOptions, Executor, Pool, Row, Sqlite};
 use std::result::Result as StdResult;
 
-use crate::error::Result;
+use crate::error::{AppError, Result};
 
 #[derive(Debug, Clone)]
 pub struct DBService {
@@ -45,7 +45,7 @@ pub(crate) enum ValidToken {
 
 impl DBService {
     pub(crate) async fn new(db_path: &str) -> Result<Self> {
-        let pool = SqlitePoolOptions::new()
+        let pool_res = SqlitePoolOptions::new()
             .max_connections(2)
             .after_connect(|conn, _meta| {
                 // sqlite doesn't allow multiple writer at the same time
@@ -61,8 +61,14 @@ impl DBService {
                 })
             })
             .connect(db_path)
-            .await?;
-        Ok(DBService { pool })
+            .await;
+        match pool_res {
+            Ok(pool) => Ok(DBService { pool }),
+            Err(err) => Err(AppError::DBInitError {
+                path: db_path.to_owned(),
+                source: err,
+            }),
+        }
     }
 
     pub async fn migrate(&self) -> Result<()> {

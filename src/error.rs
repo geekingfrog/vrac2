@@ -8,6 +8,9 @@ pub enum AppError {
     #[error("Templating error")]
     TemplateError(#[from] tera::Error),
 
+    #[error("DB error at {path}: {source}")]
+    DBInitError { path: String, source: sqlx::Error },
+
     #[error("DB error {0}")]
     DBError(#[from] sqlx::Error),
 
@@ -30,20 +33,16 @@ impl IntoResponse for AppError {
                 tracing::error!("Server error: {self:?}");
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
             }
+            AppError::DBInitError { .. } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
+            }
             AppError::DBError(ref _err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")),
             AppError::MigrationError(ref _err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
             }
             AppError::UploadError(ref _err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
-            } // AppError::IOError(_, _) => (
-              //     StatusCode::INTERNAL_SERVER_ERROR,
-              //     format!("{self:?}"),
-              // ),
-              // AppError::ParseError(err) => (
-              //     StatusCode::INTERNAL_SERVER_ERROR,
-              //     format!("Parse error: {err}")
-              // )
+            }
         };
         res.into_response()
     }
