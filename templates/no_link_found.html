@@ -1,0 +1,14 @@
+{# vim: set ft=jinja #}
+{% extends "base.html" %}
+{% block title %}Not found{% endblock title %}
+{% block head %} {{ super() }} {% endblock head %}
+
+{% block body %}
+  {{ super() }}
+  <h2 class="notif error"> No valid link found here. </h2>
+
+  <p>
+  <a href="/gen">Back to link generation (admin)</a>
+  </p>
+
+{% endblock body %}

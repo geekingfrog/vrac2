@@ -1,45 +1,46 @@
 use axum::extract::{Multipart, Path};
 use axum::response::{Redirect, Response};
-use axum::{extract::State, response::Html, response::IntoResponse};
+use axum::{
+    extract::State,
+    response::Html,
+    response::{IntoResponse, IntoResponseParts},
+};
 use axum_flash::{Flash, IncomingFlashes};
 use humantime::format_duration;
 use time::OffsetDateTime;
 
 use crate::db::ValidToken;
 use crate::error::Result;
+use crate::handlers::flash_utils::TplFlash;
 use crate::state::AppState;
-use super::flash_utils;
 
 pub(crate) async fn get_upload_form(
     state: State<AppState>,
     incoming_flashes: IncomingFlashes,
-    flash: Flash,
     Path(tok_path): Path<String>,
 ) -> Result<Response> {
     let now = OffsetDateTime::now_utc();
 
     match state.db.get_valid_token(&tok_path).await? {
-        None => Ok((
-            incoming_flashes,
-            flash.error("No valid link found"),
-            Redirect::to("/gen"),
-        )
-            .into_response()),
+        None => {
+            let html: Html<String> = state
+                .templates
+                .read()
+                .render("no_link_found.html", &tera::Context::new())?
+                .into();
+            let rsp = (hyper::StatusCode::NOT_FOUND, html);
+            Ok((incoming_flashes, rsp).into_response())
+        }
         Some(ValidToken::Fresh(tok)) => {
             let duration = tok.valid_until - now;
             let duration = std::time::Duration::from_secs(duration.as_seconds_f64().round() as u64);
 
             let mut ctx = tera::Context::new();
 
-            let mut flash_messages = incoming_flashes
+            let flash_messages = incoming_flashes
                 .iter()
                 .map(|x| x.into())
-                .collect::<Vec<_>>();
-
-            flash_messages.push(flash_utils::TplFlash {
-                level: axum_flash::Level::Success,
-                message: "coucou"
-            });
+                .collect::<Vec<TplFlash>>();
 
             ctx.insert("flash_messages", &flash_messages);
             tracing::info!("flash messages in context: {flash_messages:?}");

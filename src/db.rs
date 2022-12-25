@@ -124,7 +124,8 @@ where
     let now = time::OffsetDateTime::now_utc();
     let tok = sqlx::query_as::<_, Token>(
         "select * from token where path=?
-        and ((deleted_at is NULL) or (valid_until < ?))
+        and deleted_at is NULL
+        and valid_until > ?
         LIMIT 1",
     )
     .bind(&path)
