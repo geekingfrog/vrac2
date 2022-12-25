@@ -26,7 +26,7 @@ pub fn build(state: AppState) -> Router<()> {
                 .layer(DefaultBodyLimit::max(usize::MAX))
                 .with_state(state.clone()),
         )
-        .merge(Router::new().route(
+        .nest_service(
             "/static",
             routing::get_service(ServeDir::new("static")).handle_error(
                 |err: std::io::Error| async move {
@@ -34,6 +34,6 @@ pub fn build(state: AppState) -> Router<()> {
                     (StatusCode::INTERNAL_SERVER_ERROR, format!("{err:?}"))
                 },
             ),
-        ))
+        )
         .with_state(state)
 }

@@ -1,0 +1,26 @@
+{# vim: set ft=jinja #}
+<!DOCTYPE html>
+
+<html lang="en">
+  <head>
+    {% block head %}
+    <title>{% block title %}{% endblock title %}</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    {% endblock head %}
+  </head>
+
+  <body>
+    {% block body %}
+
+    {% if flash_messages %}
+      {% for flash in flash_messages %}
+        {% if flash.level != "Debug" %}
+        <p class="notif {{flash.level}}">{{flash.message}}</p>
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+
+    {% endblock body %}
+  </body>
+
+</html>

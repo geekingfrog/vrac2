@@ -1,32 +1,48 @@
 use axum::extract::{Multipart, Path};
-use axum::{extract::State, response::Html};
-use axum_flash::IncomingFlashes;
+use axum::response::{Redirect, Response};
+use axum::{extract::State, response::Html, response::IntoResponse};
+use axum_flash::{Flash, IncomingFlashes};
 use humantime::format_duration;
 use time::OffsetDateTime;
 
 use crate::db::ValidToken;
 use crate::error::Result;
 use crate::state::AppState;
+use super::flash_utils;
 
 pub(crate) async fn get_upload_form(
     state: State<AppState>,
     incoming_flashes: IncomingFlashes,
+    flash: Flash,
     Path(tok_path): Path<String>,
-) -> Result<(IncomingFlashes, Html<String>)> {
+) -> Result<Response> {
     let now = OffsetDateTime::now_utc();
-    for (level, flash) in &incoming_flashes {
-        tracing::info!("FLASH: [{level:?}] {flash:?}");
-    }
 
     match state.db.get_valid_token(&tok_path).await? {
-        None => {
-            todo!()
-        }
+        None => Ok((
+            incoming_flashes,
+            flash.error("No valid link found"),
+            Redirect::to("/gen"),
+        )
+            .into_response()),
         Some(ValidToken::Fresh(tok)) => {
             let duration = tok.valid_until - now;
             let duration = std::time::Duration::from_secs(duration.as_seconds_f64().round() as u64);
 
             let mut ctx = tera::Context::new();
+
+            let mut flash_messages = incoming_flashes
+                .iter()
+                .map(|x| x.into())
+                .collect::<Vec<_>>();
+
+            flash_messages.push(flash_utils::TplFlash {
+                level: axum_flash::Level::Success,
+                message: "coucou"
+            });
+
+            ctx.insert("flash_messages", &flash_messages);
+            tracing::info!("flash messages in context: {flash_messages:?}");
             ctx.insert("max_size", &tok.max_size_mib);
             ctx.insert("valid_for", &format_duration(duration).to_string());
             if let Some(d) = tok.content_expires_after_hours {
@@ -34,14 +50,12 @@ pub(crate) async fn get_upload_form(
                 ctx.insert("content_duration", &format_duration(d).to_string());
             }
 
-            Ok((
-                incoming_flashes,
-                state
-                    .templates
-                    .read()
-                    .render("upload_form.html", &ctx)?
-                    .into(),
-            ))
+            let html: Html<String> = state
+                .templates
+                .read()
+                .render("upload_form.html", &ctx)?
+                .into();
+            Ok((incoming_flashes, html).into_response())
         }
     }
 }

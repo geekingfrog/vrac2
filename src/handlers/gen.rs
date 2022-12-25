@@ -10,6 +10,8 @@ use time::OffsetDateTime;
 use crate::error::Result;
 use crate::state::AppState;
 
+use super::flash_utils::TplFlash;
+
 // need the serialize_with bits to ensure we serialize into a string.
 // because a browser will send these fields as string, this ensure consistent
 // serialization. There may be a way to accept both an integer and a string, but
@@ -40,22 +42,20 @@ pub(crate) async fn get_token(
     State(state): State<AppState>,
 ) -> Result<(IncomingFlashes, Html<String>)> {
     let mut ctx = tera::Context::new();
+    let mut flash_messages: Vec<TplFlash<'_>> = Vec::with_capacity(flashes.len());
+
     for (level, msg) in &flashes {
-        match level {
-            Level::Success => ctx.insert("message", msg),
-            Level::Error => ctx.insert("error", msg),
-            Level::Info => match serde_json::from_str(msg) {
-                Err(err) => {
-                    tracing::error!("message: {msg}");
-                    tracing::error!("invalid form in flash {err:?}");
-                }
-                Ok::<GenTokenForm, _>(x) => {
-                    ctx.insert("full_form", &x);
-                }
-            },
-            _ => (),
+        if level == Level::Info {
+            if let Ok::<GenTokenForm, _>(x) = serde_json::from_str(msg) {
+                ctx.insert("full_form", &x);
+            } else {
+                flash_messages.push((level, msg).into());
+            }
+        } else {
+            flash_messages.push((level, msg).into());
         }
     }
+    ctx.insert("flash_messages", &flash_messages);
 
     Ok((
         flashes,
@@ -98,8 +98,6 @@ pub(crate) async fn create_token(
     );
 
     match r {
-        // TODO if the token already exists, serialize the form (somehow), store
-        // it in the flash so that the form can be prefilled after the redirect.
         Err(crate::db::TokenError::AlreadyExist) => Ok((
             flash
                 .error("A valid token already exist for this path.")

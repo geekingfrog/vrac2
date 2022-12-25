@@ -1,48 +1,40 @@
 {# vim: set ft=jinja #}
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <script src="/static/upload.js" async></script>
-<style>
-img:hover {
-  cursor: pointer;
-}
-</style>
-  </head>
+{% extends "base.html" %}
+{% block title %}Upload some stuff{% endblock title %}
+{% block head %}
+  {{ super() }}
+  <script src="/static/upload.js" async></script>
+{% endblock head %}
 
-  <body>
-    <h1>Upload some stuff here</h1>
+{% block body %}
+  {{ super() }}
+
+  <h1>Upload some stuff here</h1>
+  <p>
+This page can be used to upload files {%- if max_size -%} up to {{ max_size }} MiB {% else %} as big as you want {%- endif -%}. This page is valid for {{ valid_for }}.
+  </p>
+
+  <p>
+  {%- if content_duration -%}
+    Once uploaded, the files will be valid for {{ content_duration }}.
+  {% else %}
+    The file uploaded there won't expire.
+  {%- endif -%}
+  </p>
+
+  <form id="upload-form" method="POST" enctype="multipart/form-data">
+    <noscript>
     <p>
-  This page can be used to upload files {%- if max_size -%} up to {{ max_size }} MiB {% else %} as big as you want {%- endif -%}. This page is valid for {{ valid_for }}.
+    <input type="file" id="file-1" name="file-1">
     </p>
+    <p>
+    if you enable javascript you can upload multiple files.
+    </p>
+    </noscript>
 
     <p>
-    {%- if content_duration -%}
-      Once uploaded, the files will be valid for {{ content_duration }}.
-    {% else %}
-      The file uploaded there won't expire.
-    {%- endif -%}
+      <button type="submit">Upload</button>
     </p>
+  </form>
 
-    <form id="upload-form" method="POST" enctype="multipart/form-data">
-      <noscript>
-      <p>
-      <input type="file" id="file-1" name="file-1">
-      </p>
-      <p>
-      if you enable javascript you can upload multiple files.
-      </p>
-      </noscript>
-
-      <!-- <p> -->
-      <!-- <button type="button" id="add-file">Add file</button> -->
-      <!-- </p> -->
-
-      <p>
-        <button type="submit">Upload</button>
-      </p>
-    </form>
-
-  </body>
-
-</html>
+{% endblock body %}
