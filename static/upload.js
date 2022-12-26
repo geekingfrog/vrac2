@@ -52,7 +52,7 @@ const loadImagePreview = inputElement => {
         vidSrc.src = u;
         vidSrc.type = file.type;
         // no onload=>revokeObjectURL since it doesn't seem to work (?)
-      } else {
+      } else if (vidEl.children.length > 0) {
         vidEl.removeChild(vidSrc);
         vidSrc.src = "//:0";
         vidEl.style.display = "none";
@@ -72,14 +72,15 @@ function addFile(id) {
   let inputElement = document.createElement("input");
   inputElement.type = "file";
   inputElement.name = `file_${counter}`;
+  inputElement.multiple = true;
 
   p.insertAdjacentElement("afterbegin", inputElement);
   loadImagePreview(inputElement);
-  let closeButton = document.createElement("button");
-  closeButton.setAttribute("type", "button");
-  closeButton.innerHTML = "close";
-  p.insertAdjacentElement("beforeend", closeButton);
-  closeButton.addEventListener("click", removeRow(p), {"once": true});
+  let delButton = document.createElement("button");
+  delButton.setAttribute("type", "button");
+  delButton.innerHTML = "❌";
+  p.insertAdjacentElement("beforeend", delButton);
+  delButton.addEventListener("click", removeRow(p), {"once": true});
   return p;
 }
 

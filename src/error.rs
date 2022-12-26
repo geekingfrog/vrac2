@@ -19,11 +19,12 @@ pub enum AppError {
 
     #[error("Upload error {0}")]
     UploadError(#[from] axum::extract::multipart::MultipartError),
-    // #[error("IO error from {1}: {0}")]
-    // IOError(#[source] std::io::Error, &'static str),
-    //
-    // #[error("Parsing error: {0}")]
-    // ParseError(String)
+
+    #[error("Invalid Token in URL {token} - {source}")]
+    InvalidUrlToken {
+        token: String,
+        source: std::string::FromUtf8Error,
+    },
 }
 
 impl IntoResponse for AppError {
@@ -33,16 +34,7 @@ impl IntoResponse for AppError {
                 tracing::error!("Server error: {self:?}");
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
             }
-            AppError::DBInitError { .. } => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
-            }
-            AppError::DBError(ref _err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")),
-            AppError::MigrationError(ref _err) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
-            }
-            AppError::UploadError(ref _err) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
-            }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")),
         };
         res.into_response()
     }

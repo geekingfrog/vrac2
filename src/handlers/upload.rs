@@ -1,11 +1,7 @@
 use axum::extract::{Multipart, Path};
 use axum::response::{Redirect, Response};
-use axum::{
-    extract::State,
-    response::Html,
-    response::{IntoResponse, IntoResponseParts},
-};
-use axum_flash::{Flash, IncomingFlashes};
+use axum::{extract::State, response::Html, response::IntoResponse};
+use axum_flash::IncomingFlashes;
 use humantime::format_duration;
 use time::OffsetDateTime;
 
@@ -20,6 +16,12 @@ pub(crate) async fn get_upload_form(
     Path(tok_path): Path<String>,
 ) -> Result<Response> {
     let now = OffsetDateTime::now_utc();
+
+    let tok_path =
+        urlencoding::decode(&tok_path).map_err(|e| crate::error::AppError::InvalidUrlToken {
+            token: tok_path.clone(),
+            source: e,
+        })?;
 
     match state.db.get_valid_token(&tok_path).await? {
         None => {
@@ -68,13 +70,15 @@ pub(crate) async fn post_upload_form(mut multipart: Multipart) -> Result<()> {
             field.name(),
             field.content_type()
         );
+        tracing::info!("hdr: {:?}", field.headers());
 
         let mut total = 0;
         while let Some(chunk) = field.chunk().await? {
             total += chunk.len() / 1024;
-            tracing::info!("{:04}kib / {:08}kib", chunk.len() / 1024, total);
+            // tracing::info!("{:04}kib / {:08}kib", chunk.len() / 1024, total);
             // tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        tracing::info!("total uploaded for field: {}Kib", total);
     }
     // // TODO: maybe use https://docs.rs/axum/0.6.0-rc.4/axum/extract/struct.OriginalUri.html
     // // instead of reconstructing the path here

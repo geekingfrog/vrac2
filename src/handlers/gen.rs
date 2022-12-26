@@ -106,7 +106,7 @@ pub(crate) async fn create_token(
         )),
         Ok(tok) => Ok((
             flash.success("Token created."),
-            Redirect::to(&format!("/f/{}", tok.path)),
+            Redirect::to(&format!("/f/{}", urlencoding::encode(&tok.path))),
         )),
     }
 }
