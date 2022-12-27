@@ -14,6 +14,9 @@ pub enum AppError {
     #[error("DB error {0}")]
     DBError(#[from] sqlx::Error),
 
+    #[error("No token found {reason}")]
+    NoTokenFound{reason: String},
+
     #[error("Migration error {0}")]
     MigrationError(#[from] sqlx::migrate::MigrateError),
 

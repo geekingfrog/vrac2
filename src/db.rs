@@ -1,5 +1,3 @@
-// pub(crate) type Pool = sqlx
-
 use sqlx::types::time::OffsetDateTime;
 use sqlx::Transaction;
 use sqlx::{sqlite::SqlitePoolOptions, Executor, Pool, Row, Sqlite};
@@ -21,6 +19,7 @@ pub(crate) struct Token {
     pub(crate) created_at: OffsetDateTime,
     pub(crate) content_expires_after_hours: Option<i64>,
     pub(crate) deleted_at: Option<OffsetDateTime>,
+    pub(crate) attempt_counter: i64,
 }
 
 #[derive(Debug)]
@@ -29,6 +28,27 @@ pub(crate) struct CreateToken<'input> {
     pub(crate) max_size_mib: Option<i64>,
     pub(crate) valid_until: OffsetDateTime,
     pub(crate) content_expires_after_hours: Option<i64>,
+}
+
+#[derive(sqlx::FromRow, Debug)]
+pub(crate) struct File {
+    pub(crate) id: i64,
+    pub(crate) token_id: i64,
+    pub(crate) attempt_counter: i64,
+    pub(crate) mime_type: Option<String>,
+    pub(crate) backend_type: String,
+    pub(crate) backend_data: String,
+    pub(crate) created_at: OffsetDateTime,
+    pub(crate) completed_at: Option<OffsetDateTime>,
+}
+
+/// Must be created before being able to upload files for a given token
+/// it's an opaque structure that forces the user to call
+/// an init function on the db to prepare an upload
+#[must_use]
+pub(crate) struct UploadToken {
+    token_id: i64,
+    attempt_counter: i64,
 }
 
 #[derive(Debug)]
@@ -115,6 +135,84 @@ impl DBService {
 
         Ok(Ok(tok))
     }
+
+    pub(crate) async fn initiate_upload(&self, token_id: i64) -> Result<UploadToken> {
+        let now = time::OffsetDateTime::now_utc();
+
+        let mut tx = self.pool.begin().await?;
+
+        let mut tok = sqlx::query_as::<_, Token>(
+            "SELECT * FROM token
+            WHERE id=?
+            AND deleted_at IS NULL
+            AND valid_until > ?
+            AND used_at IS NULL
+            ",
+        )
+        .bind(token_id)
+        .bind(now)
+        .fetch_optional(&mut tx)
+        .await?
+        .ok_or_else(|| AppError::NoTokenFound {
+            reason: format!("No valid token found for id {token_id}"),
+        })?;
+
+        tok.attempt_counter += 1;
+
+        sqlx::query(
+            "UPDATE token WHERE id=?
+            SET attempt_counter=?",
+        )
+        .bind(token_id)
+        .bind(tok.attempt_counter)
+        .execute(&mut tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(UploadToken {
+            token_id,
+            attempt_counter: tok.attempt_counter,
+        })
+    }
+
+    pub(crate) async fn create_file(&self, ut: &UploadToken, mime_type: &str) -> Result<File> {
+        let f = sqlx::query_as::<_, File>(
+            "INSERT INTO file
+            (token_id, attempt_counter, mime_type)
+            RETURNING *
+            ",
+        )
+        .bind(ut.token_id)
+        .bind(ut.attempt_counter)
+        .bind(mime_type)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(f)
+    }
+
+    pub(crate) async fn finalise_file_upload(&self, file: File) -> Result<()> {
+        let now = time::OffsetDateTime::now_utc();
+        sqlx::query("UPDATE file WHERE id=? SET completed_at=?")
+            .bind(file.id)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn finalise_token_upload(&self, ut: UploadToken) -> Result<()> {
+        let now = time::OffsetDateTime::now_utc();
+        sqlx::query("UPDATE token WHERE id=? SET used_at=?")
+            .bind(ut.token_id)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
 }
 
 async fn get_valid_token<'t, E>(executor: E, path: &str) -> Result<Option<Token>>
@@ -123,12 +221,13 @@ where
 {
     let now = time::OffsetDateTime::now_utc();
     let tok = sqlx::query_as::<_, Token>(
-        "select * from token where path=?
-        and deleted_at is NULL
-        and valid_until > ?
+        "SELECT * FROM token WHERE path=?
+        AND deleted_at IS NULL
+        AND valid_until > ?
+        AND used_at IS NULL
         LIMIT 1",
     )
-    .bind(&path)
+    .bind(path)
     .bind(now)
     .fetch_optional(executor)
     .await?;

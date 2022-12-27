@@ -1,1 +1,1 @@
-DROP TABLE token
+DROP TABLE IF EXISTS token

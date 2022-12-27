@@ -78,6 +78,8 @@ pub(crate) async fn create_token(
         Err(err) => {
             tracing::error!("Invalid form submitted {err:?}");
             let flash = flash.error(&format!("Invalid request submitted: {err:?}"));
+            // TODO, don't return a redirect to the same url, but instead
+            // render the page again.
             return Ok((flash, Redirect::to("/gen")));
         }
     };
@@ -98,6 +100,10 @@ pub(crate) async fn create_token(
     );
 
     match r {
+        // TODO, don't return a redirect to the same url, but instead
+        // render the page again.
+        // This avoid having to serialize the form into a flash (very meh)
+        // and streamline the validation
         Err(crate::db::TokenError::AlreadyExist) => Ok((
             flash
                 .error("A valid token already exist for this path.")

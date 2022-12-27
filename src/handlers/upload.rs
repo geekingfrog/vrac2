@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use axum::extract::{Multipart, Path};
 use axum::response::{Redirect, Response};
 use axum::{extract::State, response::Html, response::IntoResponse};
@@ -63,14 +65,46 @@ pub(crate) async fn get_upload_form(
     }
 }
 
-pub(crate) async fn post_upload_form(mut multipart: Multipart) -> Result<()> {
+pub(crate) async fn post_upload_form(
+    Path(tok_path): Path<String>,
+    state: State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Html<String>> {
+    // TODO: maybe make a custom extractor for the token which handles the
+    // urldecoding itself to reduce duplication?
+    let tok_path =
+        urlencoding::decode(&tok_path).map_err(|e| crate::error::AppError::InvalidUrlToken {
+            token: tok_path.clone(),
+            source: e,
+        })?;
+
+    let token = match state.db.get_valid_token(&tok_path).await? {
+        Some(t) => t,
+        None => {
+            let not_found = state
+                .templates
+                .read()
+                .render("no_link_found.html", &tera::Context::new())?
+                .into();
+            return Ok(not_found);
+        }
+    };
+
+    let mut file_idx = 0;
     while let Some(mut field) = multipart.next_field().await? {
+        file_idx += 1;
         tracing::info!(
-            "got a new field here {:?} of type {:?}",
+            "got a new field here {:?} of type {:?} for file {:?}",
             field.name(),
-            field.content_type()
+            field.content_type(),
+            field.file_name(),
         );
         tracing::info!("hdr: {:?}", field.headers());
+
+        let file_name = field
+            .file_name()
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| format!("file-{}", file_idx).into());
 
         let mut total = 0;
         while let Some(chunk) = field.chunk().await? {
@@ -84,5 +118,5 @@ pub(crate) async fn post_upload_form(mut multipart: Multipart) -> Result<()> {
     // // instead of reconstructing the path here
     // let redir = Redirect::temporary(&format!("/f/{}", tok_path));
     tracing::info!("done with upload");
-    Ok(())
+    Ok("".to_string().into())
 }
