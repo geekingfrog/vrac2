@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::io::ErrorKind;
 
 use axum::extract::{Multipart, Path};
 use axum::response::{Redirect, Response};
@@ -6,6 +7,9 @@ use axum::{extract::State, response::Html, response::IntoResponse};
 use axum_flash::IncomingFlashes;
 use humantime::format_duration;
 use time::OffsetDateTime;
+
+// use futures_util::stream::TryStreamExt;
+use futures::TryStreamExt;
 
 use crate::db::ValidToken;
 use crate::error::Result;
@@ -101,18 +105,26 @@ pub(crate) async fn post_upload_form(
         );
         tracing::info!("hdr: {:?}", field.headers());
 
-        let file_name = field
-            .file_name()
-            .map(Cow::Borrowed)
-            .unwrap_or_else(|| format!("file-{}", file_idx).into());
-
-        let mut total = 0;
-        while let Some(chunk) = field.chunk().await? {
-            total += chunk.len() / 1024;
-            // tracing::info!("{:04}kib / {:08}kib", chunk.len() / 1024, total);
-            // tokio::time::sleep(Duration::from_millis(50)).await;
+        {
+            let file_name = field
+                .file_name()
+                .map(Cow::Borrowed)
+                .unwrap_or_else(|| format!("file-{}", file_idx).into());
+            tracing::info!("file name is {file_name}");
         }
-        tracing::info!("total uploaded for field: {}Kib", total);
+
+        let s = field.map_err(|err| std::io::Error::new(ErrorKind::Other, format!("{err:?}")));
+
+        let mut writer = futures::io::sink();
+        let byte_copied = futures::io::copy_buf(&mut s.into_async_read(), &mut writer).await?;
+
+        // while let Some(chunk) = field.chunk().await? {
+        //     total += chunk.len() / 1024;
+        //     // tracing::info!("{:04}kib / {:08}kib", chunk.len() / 1024, total);
+        //     // tokio::time::sleep(Duration::from_millis(50)).await;
+        // }
+
+        tracing::info!("total uploaded for field: {}Kib", byte_copied / 1024);
     }
     // // TODO: maybe use https://docs.rs/axum/0.6.0-rc.4/axum/extract/struct.OriginalUri.html
     // // instead of reconstructing the path here

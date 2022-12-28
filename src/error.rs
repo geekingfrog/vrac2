@@ -1,4 +1,7 @@
-use axum::response::{IntoResponse, Response};
+use axum::{
+    extract::multipart::MultipartError,
+    response::{IntoResponse, Response},
+};
 use hyper::StatusCode;
 
 pub type Result<T> = std::result::Result<T, AppError>;
@@ -15,13 +18,15 @@ pub enum AppError {
     DBError(#[from] sqlx::Error),
 
     #[error("No token found {reason}")]
-    NoTokenFound{reason: String},
+    NoTokenFound { reason: String },
 
     #[error("Migration error {0}")]
     MigrationError(#[from] sqlx::migrate::MigrateError),
 
+    // #[error("Upload error {0}")]
+    // UploadError(#[from] axum::extract::multipart::MultipartError),
     #[error("Upload error {0}")]
-    UploadError(#[from] axum::extract::multipart::MultipartError),
+    UploadError(#[from] std::io::Error),
 
     #[error("Invalid Token in URL {token} - {source}")]
     InvalidUrlToken {
@@ -40,6 +45,15 @@ impl IntoResponse for AppError {
             _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")),
         };
         res.into_response()
+    }
+}
+
+impl From<MultipartError> for AppError {
+    fn from(err: MultipartError) -> Self {
+        AppError::UploadError(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("{err:?}"),
+        ))
     }
 }
 
