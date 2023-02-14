@@ -1,116 +1,137 @@
-use futures::{Future, FutureExt};
-use pin_project::pin_project;
-use std::{
-    error::Error,
-    path::{Path, PathBuf},
-    pin::Pin,
-    task::{Context, Poll},
+use std::{error::Error, path::PathBuf};
+use tokio::{fs::File, sync::mpsc};
+use tokio::{
+    fs::OpenOptions,
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
 };
-use tokio::fs::File;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 type IoResult<T> = std::io::Result<T>;
 
-macro_rules! ready {
-    ($e:expr $(,)?) => {
-        match $e {
-            std::task::Poll::Ready(t) => t,
-            std::task::Poll::Pending => return std::task::Poll::Pending,
-        }
-    };
+#[derive(Debug)]
+enum SplitStream {
+    ChunkStart,
+    ChunkEnd,
+    Chunk(Box<[u8]>),
 }
 
-enum WriteState {
-    NotStarted,
-    Opening {
-        inner: Pin<Box<dyn Future<Output = IoResult<File>>>>,
-    },
-    // Writing {
-    //     inner: Pin<Box<File>>,
-    //     written_so_far: usize,
-    // },
-    // Writing { foo: usize },
-}
-
-#[pin_project]
-struct SplitWriter {
-    base_path: PathBuf,
-    idx: usize,
-    /// the number of bytes to write to each file before moving to the next
-    limit: usize,
-    #[pin]
-    write_state: WriteState,
-}
-
-impl SplitWriter {
-    fn new(base_path: PathBuf, limit: usize) -> Self {
-        Self {
-            base_path,
-            idx: 0,
-            limit,
-            write_state: WriteState::NotStarted,
-        }
-    }
-}
-
-impl AsyncWrite for SplitWriter {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        // let me = self.project();
-        // match self.write_state {
-        //     WriteState::NotStarted => self.write_state = WriteState::Writing { foo: 10 },
-        //     WriteState::Writing { foo: _ } => self.write_state = WriteState::NotStarted,
-        // }
-        // Poll::Ready(Ok(0))
-
-        match self.write_state {
-            WriteState::NotStarted => {
-                let mut open = File::open("/tmp/coucou").boxed(); // as dyn Future<Output = _>;
-
-                self.write_state = WriteState::Opening { inner: open };
-
-                // let mut f = ready!(open.poll_unpin(cx))?;
-                // let to_write = std::cmp::max(buf.len(), self.limit);
-                // let wrote = ready!(Pin::new(&mut f).poll_write(cx, &buf[..to_write]))?;
-                // self.write_state = WriteState::Writing {
-                //     inner: Box::pin(f),
-                //     written_so_far: wrote,
-                // };
-                // Poll::Ready(Ok(wrote))
+async fn read_and_split<R>(rdr: R, limit: u64, out_chan: mpsc::Sender<SplitStream>) -> IoResult<()>
+where
+    R: AsyncRead + Unpin,
+{
+    use SplitStream::*;
+    let mut is_new_chunk = true;
+    let mut rdr = rdr.take(limit);
+    let mut first_empty_read = true;
+    loop {
+        let mut buf = [0_u8; 1024];
+        let n = rdr.read(&mut buf).await?;
+        if n == 0 {
+            if first_empty_read {
+                first_empty_read = false;
+                out_chan
+                    .send(ChunkEnd)
+                    .await
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                rdr = rdr.into_inner().take(limit);
+                is_new_chunk = true;
+                continue;
+            } else {
+                break Ok(());
             }
-            WriteState::Opening { inner: _ } => {
-                todo!()
+        } else {
+            first_empty_read = true;
+            if is_new_chunk {
+                out_chan
+                    .send(ChunkStart)
+                    .await
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                is_new_chunk = false;
             }
-        };
-
-        match &self.get_mut().write_state {
-            WriteState::NotStarted => todo!(),
-            WriteState::Opening { ref mut inner } => {
-                inner.poll_unpin(cx);
-                todo!()
-            },
+            out_chan
+                .send(Chunk(Box::new(buf)))
+                .await
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         }
     }
+}
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
-        todo!()
+struct FileSplitWriter {
+    limit: u64,
+    dest: Option<(PathBuf, File)>,
+}
+
+impl FileSplitWriter {
+    fn new(limit: u64) -> Self {
+        Self { limit, dest: None }
     }
 
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        todo!()
+    async fn create_dest(&mut self, index: usize) -> IoResult<()> {
+        let path = PathBuf::from(format!("/tmp/split_{:04}", index));
+        println!("creating {path:?}");
+        let file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(&path)
+            .await?;
+        self.dest = Some((path, file));
+        Ok(())
+    }
+
+    async fn split_write(
+        &mut self,
+        mut receiver: mpsc::Receiver<SplitStream>,
+    ) -> IoResult<Vec<PathBuf>> {
+        let mut index = 0;
+        let mut results = vec![];
+
+        while let Some(chunk) = receiver.recv().await {
+            use SplitStream::*;
+            match chunk {
+                ChunkStart => {
+                    self.create_dest(index).await?;
+                }
+                ChunkEnd => {
+                    index += 1;
+                    let (path, mut dest) = self.dest.take().expect("Destination isn't initialized");
+                    dest.flush().await?;
+                    results.push(path);
+                }
+                Chunk(chunk) => {
+                    let (_path, dest) = self.dest.as_mut().expect("Destination isn't initialized");
+                    dest.write_all(&chunk).await?;
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    async fn copy<R>(mut self, rdr: R) -> IoResult<Vec<PathBuf>>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let (sender, receiver) = mpsc::channel(10);
+
+        let (_, paths) = tokio::try_join!(
+            read_and_split(rdr, self.limit, sender),
+            self.split_write(receiver)
+        )?;
+
+        Ok(paths)
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut input = File::open("./storage/5M.data").await?;
-    let mut output = File::open("/tmp/5M.data").await?;
-    tokio::io::copy(&mut input, &mut output).await?;
+    let input = File::open("./storage/5M.data").await?;
+    println!("input done");
+
+    let mib = 1024 * 1024;
+    let paths = FileSplitWriter::new(2 * mib).copy(input).await?;
+    for path in paths {
+        println!("{path:?}");
+    }
+
     Ok(())
 }
