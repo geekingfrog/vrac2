@@ -10,11 +10,47 @@ use time::OffsetDateTime;
 
 // use futures_util::stream::TryStreamExt;
 use futures::TryStreamExt;
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWrite;
+
+use pin_project::pin_project;
 
 use crate::db::ValidToken;
 use crate::error::Result;
 use crate::handlers::flash_utils::TplFlash;
 use crate::state::AppState;
+
+// wrapper because I later need a futures::AsyncWrite, but tokio's File implements
+// tokio::io::AsyncWrite so this bridges the two.
+#[pin_project]
+struct FutureFile {
+    #[pin]
+    inner: tokio::fs::File,
+}
+
+impl futures::AsyncWrite for FutureFile {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.project().inner.poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.project().inner.poll_flush(cx)
+    }
+
+    fn poll_close(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.project().inner.poll_shutdown(cx)
+    }
+}
 
 pub(crate) async fn get_upload_form(
     state: State<AppState>,
@@ -95,7 +131,7 @@ pub(crate) async fn post_upload_form(
     };
 
     let mut file_idx = 0;
-    while let Some(mut field) = multipart.next_field().await? {
+    while let Some(field) = multipart.next_field().await? {
         file_idx += 1;
         tracing::info!(
             "got a new field here {:?} of type {:?} for file {:?}",
@@ -113,19 +149,23 @@ pub(crate) async fn post_upload_form(
             tracing::info!("file name is {file_name}");
         }
 
-        let s = field.map_err(|err| std::io::Error::new(ErrorKind::Other, format!("{err:?}")));
+        let s = field.map_err(|err| std::io::Error::new(ErrorKind::Other, format!("oops {err:?}")));
 
-        let mut writer = futures::io::sink();
+        let writer = OpenOptions::new()
+            .create_new(true)
+            .truncate(true)
+            .open(format!(
+                "/tmp/{}_{file_idx:05}",
+                token.get_token().unwrap().path
+            ))
+            .await?;
+        let mut writer = FutureFile { inner: writer };
+
         let byte_copied = futures::io::copy_buf(&mut s.into_async_read(), &mut writer).await?;
-
-        // while let Some(chunk) = field.chunk().await? {
-        //     total += chunk.len() / 1024;
-        //     // tracing::info!("{:04}kib / {:08}kib", chunk.len() / 1024, total);
-        //     // tokio::time::sleep(Duration::from_millis(50)).await;
-        // }
 
         tracing::info!("total uploaded for field: {}Kib", byte_copied / 1024);
     }
+
     // // TODO: maybe use https://docs.rs/axum/0.6.0-rc.4/axum/extract/struct.OriginalUri.html
     // // instead of reconstructing the path here
     // let redir = Redirect::temporary(&format!("/f/{}", tok_path));

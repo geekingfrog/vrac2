@@ -33,6 +33,12 @@ pub enum AppError {
         token: String,
         source: std::string::FromUtf8Error,
     },
+
+    #[error("Cannot save blob {message} - {source}")]
+    UploadBackendError {
+        message: String,
+        source: Box<dyn std::error::Error + Send + Sync>
+    }
 }
 
 impl IntoResponse for AppError {

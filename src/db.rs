@@ -63,6 +63,14 @@ pub(crate) enum ValidToken {
     // TODO: a used token with some files attached to it.
 }
 
+impl ValidToken {
+    pub(crate) fn get_token(&self) -> Option<&Token> {
+        match self {
+            ValidToken::Fresh(tok) => Some(tok),
+        }
+    }
+}
+
 impl DBService {
     pub(crate) async fn new(db_path: &str) -> Result<Self> {
         let pool_res = SqlitePoolOptions::new()

@@ -5,8 +5,8 @@ CREATE TABLE IF NOT EXISTS file
 , attempt_counter INTEGER NOT NULL
 , mime_type TEXT
 -- identifier to allow different backend, like local filesystem, or S3
-, backend_type TEXT
-, backend_data TEXT -- JSON
+, backend_type TEXT NOT NULL
+, backend_data TEXT NOT NULL -- JSON
 , created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now', 'utc')) -- datetime
 , completed_at TEXT -- datetime
 , FOREIGN KEY(token_id) REFERENCES token(id)

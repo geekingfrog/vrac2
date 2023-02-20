@@ -5,8 +5,9 @@ use std::{
 };
 
 use async_trait::async_trait;
+use serde::{de::DeserializeOwned, Serialize};
 // use futures::AsyncWrite;
-use tokio::fs::File;
+use tokio::fs::{self, File, OpenOptions};
 use tokio::io::AsyncWrite;
 
 use crate::error::AppError;
@@ -14,6 +15,7 @@ use crate::error::AppError;
 pub(crate) struct InitFile<'token, 'file> {
     pub(crate) token_id: i64,
     pub(crate) token_path: &'token str,
+    pub(crate) attempt_counter: i64,
     pub(crate) mime_type: Option<&'file str>,
     pub(crate) file_name: Option<&'file str>,
 }
@@ -21,9 +23,10 @@ pub(crate) struct InitFile<'token, 'file> {
 /// A trait to persist an upload somewhere. That could be on the local
 /// file system, in a db as raw bytes, in S3 or whatever.
 #[async_trait]
-pub(crate) trait Uploader
+pub(crate) trait StorageBackend
 where
-    Self::Blob: Send + AsyncWrite,
+    Self::Blob: Send + futures::AsyncWrite,
+    Self::Data: Serialize + DeserializeOwned,
 {
     /// An internal type that can be used to carry information
     /// between starting and finalizing the upload. For example,
@@ -31,75 +34,129 @@ where
     /// finalizing a multipart upload to S3
     type Blob;
 
+    /// Some datatype to be persisted to the DB
+    type Data;
+
     /// identifier to know which implementation to use when
     /// one wants to manipulate a file.
     fn get_type(&self) -> &'static str;
 
     /// To be called just before starting to upload a file to the backend.
-    async fn initiate_upload(&self, init_file: &InitFile) -> Result<Self::Blob, AppError>;
+    /// Self::Blob will use its AsyncWrite operation to persist the data
+    /// Self::Data will be stored in a database and can be used as an handle
+    /// to manipulate the Self::Blob object.
+    async fn initiate_upload(
+        &self,
+        init_file: &InitFile,
+    ) -> Result<(Self::Blob, Self::Data), AppError>;
 
     /// Must be called right after all the bytes have been uploaded, to let
     /// the backend perform any cleanup operation required.
-    async fn finalize_upload(&self, blob: Self::Blob) -> Result<(), AppError>;
+    async fn finalize_upload(&self, blob: Self::Blob) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    async fn delete_blob(&self, blob_data: Self::Data) -> Result<(), AppError>;
 }
 
+pub(crate) trait BackendErrorContext<T, E> {
+    // fn with_context(self, message: String) -> Result<T, AppError>;
+    fn with_context<C, F>(self, f: F) -> Result<T, AppError>
+    where
+        C: ToString + Send + Sync + 'static,
+        F: FnOnce() -> C;
+}
 
-// for posterity, if/when going into conflict of AsyncRead/Write definition.
-// tokio provides io::File, but doesn't provide Stream::into_async_read()
-// that is used to copy the incoming bytestream for a field into an
-// AsyncWriter provided by a backend
-// impl<T> tokio_io::AsyncRead for Compat<T>
-// where
-//     T: futures_io::AsyncRead,
-// {
-//     fn poll_read(
-//         self: Pin<&mut Self>,
-//         cx: &mut task::Context,
-//         buf: &mut [u8],
-//     ) -> Poll<io::Result<usize>> {
-//         futures_io::AsyncRead::poll_read(self.project().inner, cx, buf)
-//     }
-// }
+impl<T, E> BackendErrorContext<T, E> for Result<T, E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn with_context<C, F>(self, f: F) -> Result<T, AppError>
+    where
+        C: ToString + Send + Sync + 'static,
+        F: FnOnce() -> C,
+    {
+        self.map_err(|err| AppError::UploadBackendError {
+            message: f().to_string(),
+            source: Box::new(err),
+        })
+    }
+}
 
 pub(crate) struct LocalFsUploader {
     base_path: PathBuf,
 }
 
-pub(crate) struct LocalFsBlob(File);
+#[pin_project::pin_project]
+pub(crate) struct LocalFsBlob {
+    #[pin]
+    inner: File,
+    path: PathBuf,
+}
 
-// impl<T: ?Sized + AsyncWrite + Unpin> AsyncWrite for Box<T> {
-
-impl AsyncWrite for LocalFsBlob {
+impl futures::AsyncWrite for LocalFsBlob {
     fn poll_write(
-        mut self: Pin<&mut Self>,
-        mut cx: &mut Context<'_>,
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.0).poll_write(&mut cx, buf)
+        self.project().inner.poll_write(cx, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, mut cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.0).poll_flush(&mut cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        self.project().inner.poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, mut cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.0).poll_shutdown(&mut cx)
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        self.project().inner.poll_shutdown(cx)
     }
 }
 
 #[async_trait]
-impl Uploader for LocalFsUploader {
+impl StorageBackend for LocalFsUploader {
     type Blob = LocalFsBlob;
+    type Data = PathBuf;
 
     fn get_type(&self) -> &'static str {
         "local_fs"
     }
 
-    async fn initiate_upload(&self, init_file: &InitFile) -> Result<LocalFsBlob, AppError> {
-        todo!()
+    async fn initiate_upload(
+        &self,
+        init_file: &InitFile,
+    ) -> Result<(LocalFsBlob, PathBuf), AppError> {
+        let mut path = self.base_path.clone();
+        path.push(format!(
+            "{}_{:03}",
+            init_file.token_id, init_file.attempt_counter
+        ));
+
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&path)
+            .await
+            .with_context(|| format!("Cannot save file to {:?}", &path))?;
+        Ok((
+            LocalFsBlob {
+                inner: file,
+                path: path.clone(),
+            },
+            path,
+        ))
     }
 
-    async fn finalize_upload(&self, blob: LocalFsBlob) -> Result<(), AppError> {
-        todo!()
+    async fn finalize_upload(&self, blob: Self::Blob) -> Result<(), AppError> {
+        blob.inner
+            .sync_all()
+            .await
+            .with_context(|| format!("Cannot sync all to {:?}", &blob.path))
+    }
+
+    async fn delete_blob(&self, blob_data: Self::Data) -> Result<(), AppError> {
+        fs::remove_file(&blob_data)
+            .await
+            .with_context(|| format!("Cannot delete file at {:?}", &blob_data))?;
+        Ok(())
     }
 }
