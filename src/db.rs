@@ -269,7 +269,7 @@ impl DBService {
 
     pub(crate) async fn finalise_token_upload(&self, ut: UploadToken) -> Result<()> {
         let now = time::OffsetDateTime::now_utc();
-        let token = sqlx::query_as::<_, Token>("SELECT token where id=?")
+        let token = sqlx::query_as::<_, Token>("SELECT * from token where id=?")
             .bind(ut.id)
             .fetch_one(&self.pool)
             .await
@@ -280,7 +280,7 @@ impl DBService {
             .map(|h| now + std::time::Duration::from_secs(60 * (h as u64)));
 
         let x = sqlx::query(
-            "UPDATE token SET used_at=? content_expires_at=? WHERE id=? AND attempt_counter=?",
+            "UPDATE token SET used_at=?, content_expires_at=? WHERE id=? AND attempt_counter=?",
         )
         .bind(now)
         .bind(expires_at)
