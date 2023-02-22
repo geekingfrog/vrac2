@@ -26,6 +26,19 @@ img:hover {
   background-color: rgba(230,30,0,0.8);
 }
 
+.gen-form .option {
+  display: inline-block;
+  margin: 0 0.2rem;
+  color: rgb(80,80,80);
+}
+
+.gen-form .option:hover { cursor: pointer; }
+.gen-form .option *:hover { cursor: pointer; }
+
+.option input:checked ~ label {
+  color: black;
+}
+
 .upload-form img {
   max-width: 100%;
   max-height: 80vh;
