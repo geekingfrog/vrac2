@@ -23,6 +23,7 @@ pub fn build(state: AppState) -> Router<()> {
                     routing::get(handlers::upload::get_upload_form)
                         .post(handlers::upload::post_upload_form),
                 )
+                .route("/f/:path/:file_id", routing::get(handlers::file::get_file))
                 .layer(DefaultBodyLimit::max(usize::MAX))
                 .with_state(state.clone()),
         )

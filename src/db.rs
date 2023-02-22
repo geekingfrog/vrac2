@@ -36,6 +36,7 @@ pub(crate) struct File {
     pub(crate) token_id: i64,
     pub(crate) attempt_counter: i64,
     pub(crate) mime_type: Option<String>,
+    pub(crate) name: Option<String>,
     pub(crate) backend_type: String,
     pub(crate) backend_data: String,
     pub(crate) created_at: OffsetDateTime,
@@ -58,25 +59,7 @@ pub(crate) enum TokenError {
     AlreadyExist,
 }
 
-pub(crate) enum ValidToken {
-    /// a valid token that can be used to upload some files
-    Fresh(Token),
-    // TODO: a used token with some files attached to it.
-}
-
-impl ValidToken {
-    pub(crate) fn get_token(&self) -> Option<&Token> {
-        match self {
-            ValidToken::Fresh(tok) => Some(tok),
-        }
-    }
-
-    pub(crate) fn into_inner(self) -> Token {
-        match self {
-            ValidToken::Fresh(tok) => tok,
-        }
-    }
-}
+pub(crate) struct FreshToken(pub(crate) Token);
 
 impl DBService {
     pub(crate) async fn new(db_path: &str) -> Result<Self> {
@@ -111,9 +94,14 @@ impl DBService {
         Ok(())
     }
 
-    pub(crate) async fn get_valid_token(&self, path: &str) -> Result<Option<ValidToken>> {
-        let tok = get_valid_token(&self.pool, path).await?;
-        Ok(tok.map(ValidToken::Fresh))
+    /// a non deleted token that can be used to upload some files.
+    pub(crate) async fn get_valid_fresh_token(&self, path: &str) -> Result<Option<FreshToken>> {
+        get_valid_fresh_token(&self.pool, path).await
+    }
+
+    /// a non deleted token already associated with files.
+    pub(crate) async fn get_valid_file(&self, path: &str, file_id: i64) -> Result<Option<File>> {
+        get_valid_file(&self.pool, path, file_id).await
     }
 
     pub(crate) async fn create_token<'input>(
@@ -129,9 +117,9 @@ impl DBService {
             )
         })?;
 
-        match get_valid_token(&mut tx, ct.path).await? {
+        match get_valid_fresh_token(&mut tx, ct.path).await? {
             None => (),
-            Some(t) => {
+            Some(FreshToken(t)) => {
                 tracing::info!("Token already exist for {} at id {}", t.path, t.id);
                 return Ok(Err(TokenError::AlreadyExist));
             }
@@ -159,10 +147,12 @@ impl DBService {
         Ok(Ok(tok))
     }
 
-    pub(crate) async fn initiate_upload(&self, token: ValidToken) -> Result<UploadToken> {
+    pub(crate) async fn initiate_upload(
+        &self,
+        FreshToken(token): FreshToken,
+    ) -> Result<UploadToken> {
         let now = time::OffsetDateTime::now_utc();
 
-        let token = token.into_inner();
         let mut tx = self.pool.begin().await.with_context(|| {
             format!(
                 "cannot begin transaction to initiate upload for token {}",
@@ -216,12 +206,13 @@ impl DBService {
         backend_type: &str,
         backend_data: String,
         mime_type: Option<&str>,
+        file_name: Option<&str>,
     ) -> Result<File> {
         let f = sqlx::query_as::<_, File>(
             "INSERT INTO file
-            (token_id, attempt_counter, backend_type, backend_data, mime_type)
+            (token_id, attempt_counter, backend_type, backend_data, mime_type, name)
             VALUES
-            (?,?,?,?,?)
+            (?,?,?,?,?,?)
             RETURNING *",
         )
         .bind(ut.id)
@@ -229,6 +220,7 @@ impl DBService {
         .bind(backend_type)
         .bind(backend_data)
         .bind(mime_type)
+        .bind(file_name)
         .fetch_one(&self.pool)
         .await
         .with_context(|| {
@@ -277,7 +269,7 @@ impl DBService {
 
         let expires_at = token
             .content_expires_after_hours
-            .map(|h| now + std::time::Duration::from_secs(60 * (h as u64)));
+            .map(|h| now + std::time::Duration::from_secs(3600 * (h as u64)));
 
         let x = sqlx::query(
             "UPDATE token SET used_at=?, content_expires_at=? WHERE id=? AND attempt_counter=?",
@@ -298,7 +290,7 @@ impl DBService {
     }
 }
 
-async fn get_valid_token<'t, E>(executor: E, path: &str) -> Result<Option<Token>>
+async fn get_valid_fresh_token<'t, E>(executor: E, path: &str) -> Result<Option<FreshToken>>
 where
     E: sqlx::SqliteExecutor<'t>,
 {
@@ -307,14 +299,48 @@ where
         "SELECT * FROM token WHERE path=?
         AND deleted_at IS NULL
         AND valid_until > ?
-        AND used_at IS NULL
+        AND (used_at IS NULL
+            -- if there's an existing token, but it's expired, we're good
+            OR (content_expires_after_hours is not null and content_expires_at < ?)
+        )
         LIMIT 1",
     )
     .bind(path)
     .bind(now)
+    .bind(now)
     .fetch_optional(executor)
     .await
-    .with_context(|| format!("cannot get a valid token at path {}", &path))?;
+    .with_context(|| format!("cannot get a valid fresh token at path {}", &path))?;
 
-    Ok(tok)
+    Ok(tok.map(FreshToken))
+}
+
+async fn get_valid_file<'t, E>(executor: E, path: &str, file_id: i64) -> Result<Option<File>>
+where
+    E: sqlx::SqliteExecutor<'t>,
+{
+    let now = time::OffsetDateTime::now_utc();
+
+    sqlx::query_as::<_, File>(
+        "SELECT f.* from file as f INNER JOIN token as t ON f.token_id = t.id
+        WHERE t.path=?
+        AND f.id=?
+        AND t.deleted_at IS NULL
+        AND t.used_at IS NOT NULL
+        AND (t.content_expires_after_hours IS NULL
+            OR t.content_expires_at > ?
+        )
+        AND f.completed_at IS NOT NULL",
+    )
+    .bind(path)
+    .bind(file_id)
+    .bind(now)
+    .fetch_optional(executor)
+    .await
+    .with_context(|| {
+        format!(
+            "cannot select a valid file for token at path {} and file id {}",
+            path, file_id
+        )
+    })
 }

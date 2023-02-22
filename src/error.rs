@@ -1,6 +1,6 @@
 use axum::{
     extract::multipart::MultipartError,
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
 };
 use hyper::StatusCode;
 
@@ -37,21 +37,34 @@ pub enum AppError {
         source: std::string::FromUtf8Error,
     },
 
+    #[error("Corrupted data, unknown storage backend: {0}")]
+    UnknownStorageBackend(String),
+
     #[error("Cannot save blob {message} - {source}")]
     UploadBackendError {
         message: String,
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+
+    #[error("Invalid json data for storage backend {source}")]
+    InvalidStorageBackendJSON {
+        #[from]
+        source: serde_json::Error
+    },
+
+    #[error("not found")]
+    NotFound { body: Html<String> },
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let res = match self {
+            AppError::NotFound { body } => (StatusCode::NOT_FOUND, body).into_response(),
             AppError::TemplateError(ref _err) => {
                 tracing::error!("Server error: {self:?}");
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}"))
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")).into_response()
             }
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")).into_response(),
         };
         res.into_response()
     }

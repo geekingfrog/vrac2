@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Serialize, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 // use futures::AsyncWrite;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::AsyncWrite;
@@ -25,24 +25,25 @@ pub(crate) struct InitFile<'token, 'file> {
     pub(crate) file_name: Option<&'file str>,
 }
 
-pub(crate) trait Blob {}
-pub(crate) trait Data {}
-
 /// A trait to persist an upload somewhere. That could be on the local
 /// file system, in a db as raw bytes, in S3 or whatever.
 #[async_trait]
 pub(crate) trait StorageBackend
 where
-    Self::Blob: Send + futures::AsyncWrite,
+    Self::Blob: Send + futures::AsyncWrite + tokio::io::AsyncRead,
     Self::Data: Serialize + DeserializeOwned,
 {
     /// An internal type that can be used to carry information
     /// between starting and finalizing the upload. For example,
     /// marking the transfer as completed in a metadata service, or
     /// finalizing a multipart upload to S3
+    /// The AsyncWrite method will be used to store the actual data
+    /// The AsyncRead should be used to return what was stored
     type Blob;
 
     /// Some datatype to be persisted to the DB
+    /// This should be used to store anything that's required to retrieve the
+    /// stored blob later on.
     type Data;
 
     /// identifier to know which implementation to use when
@@ -66,11 +67,8 @@ where
     }
 
     async fn delete_blob(&self, blob_data: Self::Data) -> Result<(), AppError>;
-}
 
-pub(crate) trait Storage:
-    StorageBackend<Blob = dyn Blob, Data = dyn Data> + Send + Sync + std::fmt::Debug
-{
+    async fn read_blob(&self, blob_data: Self::Data) -> Result<Self::Blob, AppError>;
 }
 
 pub(crate) trait BackendErrorContext<T, E> {
@@ -109,7 +107,7 @@ impl LocalFsUploader {
     {
         Self {
             base_path: base_path.into(),
-            version: 0
+            version: 0,
         }
     }
 }
@@ -139,8 +137,15 @@ impl futures::AsyncWrite for LocalFsBlob {
     }
 }
 
-impl Data for PathBuf {}
-impl Blob for LocalFsBlob {}
+impl tokio::io::AsyncRead for LocalFsBlob {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.project().inner.poll_read(cx, buf)
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct LocalFsData {
@@ -198,5 +203,15 @@ impl StorageBackend for LocalFsUploader {
             .await
             .with_context(|| format!("Cannot delete file at {:?}", &blob_data.path))?;
         Ok(())
+    }
+
+    async fn read_blob(&self, blob_data: Self::Data) -> Result<Self::Blob, AppError> {
+        let file = fs::File::open(&blob_data.path)
+            .await
+            .with_context(|| format!("Cannot open file at {:?}", blob_data.path))?;
+        Ok(LocalFsBlob {
+            inner: file,
+            path: blob_data.path,
+        })
     }
 }

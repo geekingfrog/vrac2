@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS file
 , token_id INTEGER NOT NULL
 , attempt_counter INTEGER NOT NULL
 , mime_type TEXT
+, name TEXT
 -- identifier to allow different backend, like local filesystem, or S3
 , backend_type TEXT NOT NULL
 , backend_data TEXT NOT NULL -- JSON

@@ -15,7 +15,7 @@ use tokio::io::AsyncWrite;
 
 use pin_project::pin_project;
 
-use crate::db::ValidToken;
+use crate::db::FreshToken;
 use crate::error::Result;
 use crate::handlers::flash_utils::TplFlash;
 use crate::state::AppState;
@@ -66,7 +66,7 @@ pub(crate) async fn get_upload_form(
             source: e,
         })?;
 
-    match state.db.get_valid_token(&tok_path).await? {
+    match state.db.get_valid_fresh_token(&tok_path).await? {
         None => {
             let html: Html<String> = state
                 .templates
@@ -76,7 +76,7 @@ pub(crate) async fn get_upload_form(
             let rsp = (hyper::StatusCode::NOT_FOUND, html);
             Ok((incoming_flashes, rsp).into_response())
         }
-        Some(ValidToken::Fresh(tok)) => {
+        Some(FreshToken(tok)) => {
             let duration = tok.valid_until - now;
             let duration = std::time::Duration::from_secs(duration.as_seconds_f64().round() as u64);
 
@@ -119,7 +119,7 @@ pub(crate) async fn post_upload_form(
             source: e,
         })?;
 
-    let token = match state.db.get_valid_token(&tok_path).await? {
+    let token = match state.db.get_valid_fresh_token(&tok_path).await? {
         Some(t) => t,
         None => {
             let not_found = state
@@ -158,8 +158,9 @@ pub(crate) async fn post_upload_form(
             .create_file(
                 &token,
                 state.storage_fs.get_type(),
-                serde_json::to_string(&data).expect("serialize storage backend json data"),
+                serde_json::to_string(&data)?,
                 mime_type,
+                field.file_name(),
             )
             .await?;
 
@@ -172,10 +173,7 @@ pub(crate) async fn post_upload_form(
             .db
             .finalise_file_upload(
                 db_file,
-                mb_data.map(|d| {
-                    serde_json::to_string(&d)
-                        .expect("data from storage backend cannot be json serialized")
-                }),
+                mb_data.map(|d| serde_json::to_string(&d)).transpose()?,
             )
             .await?;
 
