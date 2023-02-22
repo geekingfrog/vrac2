@@ -19,6 +19,7 @@ use crate::db::ValidToken;
 use crate::error::Result;
 use crate::handlers::flash_utils::TplFlash;
 use crate::state::AppState;
+use crate::upload::{InitFile, StorageBackend};
 
 // wrapper because I later need a futures::AsyncWrite, but tokio's File implements
 // tokio::io::AsyncWrite so this bridges the two.
@@ -129,6 +130,7 @@ pub(crate) async fn post_upload_form(
             return Ok(not_found);
         }
     };
+    let token = state.db.initiate_upload(token).await?;
 
     let mut file_idx = 0;
     while let Some(field) = multipart.next_field().await? {
@@ -139,32 +141,48 @@ pub(crate) async fn post_upload_form(
             field.content_type(),
             field.file_name(),
         );
-        tracing::info!("hdr: {:?}", field.headers());
 
-        {
-            let file_name = field
-                .file_name()
-                .map(Cow::Borrowed)
-                .unwrap_or_else(|| format!("file-{}", file_idx).into());
-            tracing::info!("file name is {file_name}");
-        }
+        let mime_type = field.content_type();
+        let init_file = InitFile {
+            token_id: token.id,
+            token_path: &token.path,
+            file_index: file_idx,
+            attempt_counter: token.attempt_counter,
+            mime_type,
+            file_name: field.file_name(),
+        };
 
-        let s = field.map_err(|err| std::io::Error::new(ErrorKind::Other, format!("oops {err:?}")));
-
-        let writer = OpenOptions::new()
-            .create_new(true)
-            .truncate(true)
-            .open(format!(
-                "/tmp/{}_{file_idx:05}",
-                token.get_token().unwrap().path
-            ))
+        let (mut writer, data) = state.storage_fs.initiate_upload(&init_file).await?;
+        let db_file = state
+            .db
+            .create_file(
+                &token,
+                state.storage_fs.get_type(),
+                serde_json::to_string(&data).expect("serialize storage backend json data"),
+                mime_type,
+            )
             .await?;
-        let mut writer = FutureFile { inner: writer };
 
-        let byte_copied = futures::io::copy_buf(&mut s.into_async_read(), &mut writer).await?;
+        let reader =
+            field.map_err(|err| std::io::Error::new(ErrorKind::Other, format!("oops {err:?}")));
+        let byte_copied = futures::io::copy_buf(&mut reader.into_async_read(), &mut writer).await?;
+
+        let mb_data = state.storage_fs.finalize_upload(writer).await?;
+        state
+            .db
+            .finalise_file_upload(
+                db_file,
+                mb_data.map(|d| {
+                    serde_json::to_string(&d)
+                        .expect("data from storage backend cannot be json serialized")
+                }),
+            )
+            .await?;
 
         tracing::info!("total uploaded for field: {}Kib", byte_copied / 1024);
     }
+
+    state.db.finalise_token_upload(token).await?;
 
     // // TODO: maybe use https://docs.rs/axum/0.6.0-rc.4/axum/extract/struct.OriginalUri.html
     // // instead of reconstructing the path here

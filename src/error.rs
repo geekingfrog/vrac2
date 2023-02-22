@@ -14,8 +14,11 @@ pub enum AppError {
     #[error("DB error at {path}: {source}")]
     DBInitError { path: String, source: sqlx::Error },
 
-    #[error("DB error {0}")]
-    DBError(#[from] sqlx::Error),
+    #[error("DB error {message} - {source}")]
+    DBError {
+        message: String,
+        source: sqlx::Error,
+    },
 
     #[error("No token found {reason}")]
     NoTokenFound { reason: String },
@@ -37,8 +40,8 @@ pub enum AppError {
     #[error("Cannot save blob {message} - {source}")]
     UploadBackendError {
         message: String,
-        source: Box<dyn std::error::Error + Send + Sync>
-    }
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 impl IntoResponse for AppError {
@@ -60,6 +63,26 @@ impl From<MultipartError> for AppError {
             std::io::ErrorKind::Other,
             format!("{err:?}"),
         ))
+    }
+}
+
+pub(crate) trait DBErrorContext<T> {
+    fn with_context<C, F>(self, f: F) -> Result<T>
+    where
+        C: ToString + Send + Sync + 'static,
+        F: FnOnce() -> C;
+}
+
+impl<T> DBErrorContext<T> for sqlx::Result<T> {
+    fn with_context<C, F>(self, f: F) -> Result<T>
+    where
+        C: ToString + Send + Sync + 'static,
+        F: FnOnce() -> C,
+    {
+        self.map_err(|source| AppError::DBError {
+            message: f().to_string(),
+            source,
+        })
     }
 }
 
