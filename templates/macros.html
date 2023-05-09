@@ -1,0 +1,18 @@
+{# vim: set ft=jinja #}
+
+{% macro inline_file(file) %}
+
+{% set path="./" ~ token_path ~ "/" ~ file.id %}
+
+<p>
+{% if file.mime_prefix == "image" %}
+  <img src="{{path}}">
+{% elif file.mime_prefix == "video" %}
+  <video controls>
+    <source src="{{path}}" type="{{file.mime_type}}">
+  </video>
+{% endif %}
+</p>
+<p><a href="{{path}}" download>📥 Download {{file.name}}</a></p>
+
+{% endmacro inline_file %}

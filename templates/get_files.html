@@ -1,0 +1,23 @@
+{# vim: set ft=jinja #}
+{% import "macros.html" as macros %}
+
+{% extends "base.html" %}
+{% block title %}Generate an upload link{% endblock title %}
+{% block head %} {{ super() }} {% endblock head %}
+
+{% block body %}
+  {{ super() }}
+  {%- if expires_at -%}
+this page will expires in {{expires_in}} (at {{ expires_at }} UTC)
+  {% else %}
+    this page will never expires woooo !
+  {%- endif -%}
+
+  <ul class="file-list">
+{% for file in files %}
+<li>{{ macros::inline_file(file=file) }}</li>
+{% endfor %}
+  </ul>
+
+{% endblock body %}
+

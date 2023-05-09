@@ -3,10 +3,6 @@ body {
   margin: 2rem auto;
 }
 
-img:hover {
-  cursor: pointer;
-}
-
 .notif {
   padding: 0.8rem;
   text-align: center;
@@ -39,7 +35,22 @@ img:hover {
   color: black;
 }
 
-.upload-form img {
+.upload-form img,
+.file-list img,
+.file-list video {
   max-width: 100%;
   max-height: 80vh;
+}
+
+.upload-form img:hover {
+  cursor: pointer;
+}
+
+
+.file-list {
+  list-style-type: none;
+}
+
+.file-list li {
+  padding-top: 1rem;
 }

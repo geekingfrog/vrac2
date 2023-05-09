@@ -11,7 +11,7 @@ pub struct DBService {
 }
 
 #[derive(sqlx::FromRow, Debug)]
-pub(crate) struct Token {
+pub(crate) struct DbToken {
     pub(crate) id: i64,
     pub(crate) path: String,
     pub(crate) max_size_mib: Option<i64>,
@@ -20,6 +20,8 @@ pub(crate) struct Token {
     pub(crate) content_expires_after_hours: Option<i64>,
     pub(crate) deleted_at: Option<OffsetDateTime>,
     pub(crate) attempt_counter: i64,
+    pub(crate) used_at: Option<OffsetDateTime>,
+    pub(crate) content_expires_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug)]
@@ -59,7 +61,19 @@ pub(crate) enum TokenError {
     AlreadyExist,
 }
 
-pub(crate) struct FreshToken(pub(crate) Token);
+#[derive(Debug)]
+pub(crate) enum GetTokenResult {
+    /// not found (or expired, but since there can be many expired token,
+    /// just ignore that, since in practice this difference shouldn't have any
+    /// impact)
+    NotFound,
+    /// token exists and can be used to upload stuff
+    Fresh(DbToken),
+    /// token exists, is valid, and can be used to see/display stuff
+    Used(DbToken),
+}
+
+pub(crate) struct FreshToken(pub(crate) DbToken);
 
 impl DBService {
     pub(crate) async fn new(db_path: &str) -> Result<Self> {
@@ -95,8 +109,8 @@ impl DBService {
     }
 
     /// a non deleted token that can be used to upload some files.
-    pub(crate) async fn get_valid_fresh_token(&self, path: &str) -> Result<Option<FreshToken>> {
-        get_valid_fresh_token(&self.pool, path).await
+    pub(crate) async fn get_valid_token(&self, path: &str) -> Result<GetTokenResult> {
+        get_valid_token(&self.pool, path).await
     }
 
     /// a non deleted token already associated with files.
@@ -104,10 +118,20 @@ impl DBService {
         get_valid_file(&self.pool, path, file_id).await
     }
 
+    pub(crate) async fn get_files(&self, token_id: i64, attempt_counter: i64) -> Result<Vec<File>> {
+        sqlx::query_as::<_, File>(
+            "SELECT * from file where token_id = ? AND attempt_counter=?")
+            .bind(token_id)
+            .bind(attempt_counter)
+            .fetch_all(&self.pool)
+            .await
+            .with_context(|| format!("cannot get files for token with id {token_id}"))
+    }
+
     pub(crate) async fn create_token<'input>(
         &self,
         ct: CreateToken<'input>,
-    ) -> Result<StdResult<Token, TokenError>> {
+    ) -> Result<StdResult<DbToken, TokenError>> {
         tracing::info!("Creating a token: {ct:?}");
 
         let mut tx = self.pool.begin().await.with_context(|| {
@@ -117,15 +141,18 @@ impl DBService {
             )
         })?;
 
-        match get_valid_fresh_token(&mut tx, ct.path).await? {
-            None => (),
-            Some(FreshToken(t)) => {
+        let t = get_valid_token(&mut tx, ct.path).await?;
+        tracing::info!("valid token is: {:?}", t);
+
+        match get_valid_token(&mut tx, ct.path).await? {
+            GetTokenResult::Used(t) | GetTokenResult::Fresh(t) => {
                 tracing::info!("Token already exist for {} at id {}", t.path, t.id);
                 return Ok(Err(TokenError::AlreadyExist));
             }
+            _ => (),
         };
 
-        let tok = sqlx::query_as::<_, Token>(
+        let tok = sqlx::query_as::<_, DbToken>(
             "INSERT INTO token
             (path, max_size_mib, valid_until, content_expires_after_hours)
             VALUES (?,?,?,?)
@@ -147,10 +174,7 @@ impl DBService {
         Ok(Ok(tok))
     }
 
-    pub(crate) async fn initiate_upload(
-        &self,
-        FreshToken(token): FreshToken,
-    ) -> Result<UploadToken> {
+    pub(crate) async fn initiate_upload(&self, token: DbToken) -> Result<UploadToken> {
         let now = time::OffsetDateTime::now_utc();
 
         let mut tx = self.pool.begin().await.with_context(|| {
@@ -160,7 +184,7 @@ impl DBService {
             )
         })?;
 
-        let mut tok = sqlx::query_as::<_, Token>(
+        let mut tok = sqlx::query_as::<_, DbToken>(
             "SELECT * FROM token
             WHERE id=?
             AND deleted_at IS NULL
@@ -261,7 +285,7 @@ impl DBService {
 
     pub(crate) async fn finalise_token_upload(&self, ut: UploadToken) -> Result<()> {
         let now = time::OffsetDateTime::now_utc();
-        let token = sqlx::query_as::<_, Token>("SELECT * from token where id=?")
+        let token = sqlx::query_as::<_, DbToken>("SELECT * from token where id=?")
             .bind(ut.id)
             .fetch_one(&self.pool)
             .await
@@ -290,29 +314,44 @@ impl DBService {
     }
 }
 
-async fn get_valid_fresh_token<'t, E>(executor: E, path: &str) -> Result<Option<FreshToken>>
+async fn get_valid_token<'t, E>(executor: E, path: &str) -> Result<GetTokenResult>
 where
     E: sqlx::SqliteExecutor<'t>,
 {
     let now = time::OffsetDateTime::now_utc();
-    let tok = sqlx::query_as::<_, Token>(
+    let tokens = sqlx::query_as::<_, DbToken>(
         "SELECT * FROM token WHERE path=?
         AND deleted_at IS NULL
         AND valid_until > ?
-        AND (used_at IS NULL
-            -- if there's an existing token, but it's expired, we're good
-            OR (content_expires_after_hours is not null and content_expires_at < ?)
-        )
         LIMIT 1",
     )
     .bind(path)
     .bind(now)
-    .bind(now)
-    .fetch_optional(executor)
+    // there can be several used token.
+    .fetch_all(executor)
     .await
     .with_context(|| format!("cannot get a valid fresh token at path {}", &path))?;
 
-    Ok(tok.map(FreshToken))
+    // for all the tokens we got here, we can have three states:
+    //   * fresh
+    //   * used and not yet expired
+    //   * used and expired
+    // but by construction, at any point in time, there can only be one token that at most
+    // that is either fresh or used and not yet expired
+    for tok in tokens {
+        if tok.used_at.is_none() {
+            return Ok(GetTokenResult::Fresh(tok));
+        } else {
+            let now = OffsetDateTime::now_utc();
+            match (tok.content_expires_after_hours, tok.content_expires_at) {
+                (None, _) | (_, None) => return Ok(GetTokenResult::Used(tok)),
+                (_, Some(expires_at)) if expires_at > now => return Ok(GetTokenResult::Used(tok)),
+                _ => (),
+            }
+        }
+    }
+
+    Ok(GetTokenResult::NotFound)
 }
 
 async fn get_valid_file<'t, E>(executor: E, path: &str, file_id: i64) -> Result<Option<File>>

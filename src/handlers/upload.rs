@@ -6,7 +6,7 @@ use axum::response::{Redirect, Response};
 use axum::{extract::State, response::Html, response::IntoResponse};
 use axum_flash::IncomingFlashes;
 use humantime::format_duration;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, Duration};
 
 // use futures_util::stream::TryStreamExt;
 use futures::TryStreamExt;
@@ -15,7 +15,7 @@ use tokio::io::AsyncWrite;
 
 use pin_project::pin_project;
 
-use crate::db::FreshToken;
+use crate::db::{File, FreshToken, GetTokenResult};
 use crate::error::Result;
 use crate::handlers::flash_utils::TplFlash;
 use crate::state::AppState;
@@ -53,6 +53,29 @@ impl futures::AsyncWrite for FutureFile {
     }
 }
 
+/// How to render a File in a template from a DB file
+#[derive(serde::Serialize, Debug)]
+struct TplFile {
+    id: i64,
+    mime_type: Option<String>,
+    mime_prefix: Option<String>,
+    name: Option<String>,
+}
+
+impl std::convert::From<File> for TplFile {
+    fn from(f: File) -> Self {
+        Self {
+            id: f.id,
+            mime_type: f.mime_type.clone(),
+            mime_prefix: f.mime_type.and_then(|m| match m.split_once('/') {
+                Some((x, _)) => Some(x.to_string()),
+                None => None,
+            }),
+            name: f.name,
+        }
+    }
+}
+
 pub(crate) async fn get_upload_form(
     state: State<AppState>,
     incoming_flashes: IncomingFlashes,
@@ -66,8 +89,8 @@ pub(crate) async fn get_upload_form(
             source: e,
         })?;
 
-    match state.db.get_valid_fresh_token(&tok_path).await? {
-        None => {
+    match state.db.get_valid_token(&tok_path).await? {
+        GetTokenResult::NotFound => {
             let html: Html<String> = state
                 .templates
                 .read()
@@ -76,7 +99,8 @@ pub(crate) async fn get_upload_form(
             let rsp = (hyper::StatusCode::NOT_FOUND, html);
             Ok((incoming_flashes, rsp).into_response())
         }
-        Some(FreshToken(tok)) => {
+        GetTokenResult::Fresh(tok) => {
+            tracing::info!("fresh token {} - {}", tok.id, tok.path);
             let duration = tok.valid_until - now;
             let duration = std::time::Duration::from_secs(duration.as_seconds_f64().round() as u64);
 
@@ -103,6 +127,56 @@ pub(crate) async fn get_upload_form(
                 .into();
             Ok((incoming_flashes, html).into_response())
         }
+        GetTokenResult::Used(tok) => {
+            let mut ctx = tera::Context::new();
+            ctx.insert(
+                "expires_at",
+                &tok.content_expires_at.map(|d| {
+                    let fmt =
+                        time::macros::format_description!("[year]/[month]/[day] [hour]:[minute]");
+                    d.format(&fmt).expect("formatting offsetdatetime")
+                }),
+            );
+
+            ctx.insert(
+                "expires_in",
+                &tok.content_expires_at.map(|expires_at| {
+                    let now = OffsetDateTime::now_utc();
+                    let mut d = expires_at - now;
+                    let mut res = String::new();
+                    let days = d.whole_days();
+                    d = d - Duration::days(days);
+                    let hours = d.whole_hours();
+                    d = d - Duration::hours(hours);
+                    let minutes = d.whole_minutes();
+                    if days > 0 {
+                        res.push_str(&format!("{} days ", days));
+                    }
+                    if hours > 0 {
+                        res.push_str(&format!("{} hours ", hours));
+                    }
+                    if minutes > 0 {
+                        res.push_str(&format!("{} minutes ", minutes));
+                    }
+
+                    res
+                }),
+            );
+
+            ctx.insert("token_path", &tok.path);
+
+            let files = state.db.get_files(tok.id, tok.attempt_counter).await?;
+            let files: Vec<TplFile> = files.into_iter().map(|f| f.into()).collect();
+
+            ctx.insert("files", &files);
+
+            let html: Html<String> = state
+                .templates
+                .read()
+                .render("get_files.html", &ctx)?
+                .into();
+            Ok((incoming_flashes, html).into_response())
+        }
     }
 }
 
@@ -110,7 +184,7 @@ pub(crate) async fn post_upload_form(
     Path(tok_path): Path<String>,
     state: State<AppState>,
     mut multipart: Multipart,
-) -> Result<Html<String>> {
+) -> Result<Response> {
     // TODO: maybe make a custom extractor for the token which handles the
     // urldecoding itself to reduce duplication?
     let tok_path =
@@ -119,15 +193,14 @@ pub(crate) async fn post_upload_form(
             source: e,
         })?;
 
-    let token = match state.db.get_valid_fresh_token(&tok_path).await? {
-        Some(t) => t,
-        None => {
+    let token = match state.db.get_valid_token(&tok_path).await? {
+        GetTokenResult::Fresh(t) => t,
+        GetTokenResult::NotFound | GetTokenResult::Used(_) => {
             let not_found = state
                 .templates
                 .read()
-                .render("no_link_found.html", &tera::Context::new())?
-                .into();
-            return Ok(not_found);
+                .render("no_link_found.html", &tera::Context::new())?;
+            return Ok(not_found.into_response());
         }
     };
     let token = state.db.initiate_upload(token).await?;
@@ -181,10 +254,9 @@ pub(crate) async fn post_upload_form(
     }
 
     state.db.finalise_token_upload(token).await?;
-
-    // // TODO: maybe use https://docs.rs/axum/0.6.0-rc.4/axum/extract/struct.OriginalUri.html
-    // // instead of reconstructing the path here
-    // let redir = Redirect::temporary(&format!("/f/{}", tok_path));
     tracing::info!("done with upload");
-    Ok("".to_string().into())
+
+    // TODO: maybe use https://docs.rs/axum/0.6.0-rc.4/axum/extract/struct.OriginalUri.html
+    // instead of reconstructing the path here
+    Ok(Redirect::to(&format!("/f/{}", tok_path)).into_response())
 }
