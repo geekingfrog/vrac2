@@ -13,14 +13,35 @@ pub struct DBService {
 #[derive(sqlx::FromRow, Debug)]
 pub(crate) struct DbToken {
     pub(crate) id: i64,
+    /// the path in the url
     pub(crate) path: String,
+    /// at most that many MiB for the sum of all files to be associated with this token
     pub(crate) max_size_mib: Option<i64>,
+
+    /// This token will expires after this date. This field only has meaning until
+    /// some files are uploaded sucessfully, after which it becomes moot.
     pub(crate) valid_until: OffsetDateTime,
+
+    /// Creation date
     pub(crate) created_at: OffsetDateTime,
+
+    /// How long this token (and the associated files) should be kept after the upload
     pub(crate) content_expires_after_hours: Option<i64>,
+
+    /// When is this token has been deleted (not sure I need that)
     pub(crate) deleted_at: Option<OffsetDateTime>,
+
+    /// Counter to keep track of which files are associated to this token.
+    /// This is required because a request can fail midway when uploading some files.
+    /// In this case, the associated files should be considered up for deletion and
+    /// not be displayed for this token.
     pub(crate) attempt_counter: i64,
+
+    /// When has this token be used to sucessfully upload some files
     pub(crate) used_at: Option<OffsetDateTime>,
+
+    /// this token and the associated files are considered expired (and will be deleted
+    /// asynchronously) after this date
     pub(crate) content_expires_at: Option<OffsetDateTime>,
 }
 
@@ -33,7 +54,7 @@ pub(crate) struct CreateToken<'input> {
 }
 
 #[derive(sqlx::FromRow, Debug)]
-pub(crate) struct File {
+pub(crate) struct DbFile {
     pub(crate) id: i64,
     pub(crate) token_id: i64,
     pub(crate) attempt_counter: i64,
@@ -114,13 +135,16 @@ impl DBService {
     }
 
     /// a non deleted token already associated with files.
-    pub(crate) async fn get_valid_file(&self, path: &str, file_id: i64) -> Result<Option<File>> {
+    pub(crate) async fn get_valid_file(&self, path: &str, file_id: i64) -> Result<Option<DbFile>> {
         get_valid_file(&self.pool, path, file_id).await
     }
 
-    pub(crate) async fn get_files(&self, token_id: i64, attempt_counter: i64) -> Result<Vec<File>> {
-        sqlx::query_as::<_, File>(
-            "SELECT * from file where token_id = ? AND attempt_counter=?")
+    pub(crate) async fn get_files(
+        &self,
+        token_id: i64,
+        attempt_counter: i64,
+    ) -> Result<Vec<DbFile>> {
+        sqlx::query_as::<_, DbFile>("SELECT * from file where token_id = ? AND attempt_counter=?")
             .bind(token_id)
             .bind(attempt_counter)
             .fetch_all(&self.pool)
@@ -231,8 +255,8 @@ impl DBService {
         backend_data: String,
         mime_type: Option<&str>,
         file_name: Option<&str>,
-    ) -> Result<File> {
-        let f = sqlx::query_as::<_, File>(
+    ) -> Result<DbFile> {
+        let f = sqlx::query_as::<_, DbFile>(
             "INSERT INTO file
             (token_id, attempt_counter, backend_type, backend_data, mime_type, name)
             VALUES
@@ -259,7 +283,7 @@ impl DBService {
 
     pub(crate) async fn finalise_file_upload(
         &self,
-        file: File,
+        file: DbFile,
         backend_data: Option<String>,
     ) -> Result<()> {
         if let Some(data) = backend_data {
@@ -312,7 +336,98 @@ impl DBService {
 
         Ok(())
     }
+
+    pub(crate) async fn get_files_to_delete(&self, now: &OffsetDateTime) -> Result<Vec<DbFile>> {
+        sqlx::query_as::<_, DbFile>(
+            "SELECT f.* from file as f
+            INNER JOIN token as t
+            ON t.id = f.token_id
+            WHERE (t.content_expires_at <= ?)
+            OR (t.attempt_counter > f.attempt_counter)
+            OR (used_at IS NULL AND valid_until <= ?)",
+        )
+        .bind(now)
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| "failed to fetch files to delete".to_string())
+    }
+
+    /// Delete the token in DB that are expired (used or not)
+    /// This doesn't do anything with the potential associated files.
+    pub(crate) async fn delete_expired_tokens(&self, now: &OffsetDateTime) -> Result<()> {
+        sqlx::query(
+            "DELETE from token
+            WHERE (content_expires_at <= ?)
+            OR (used_at IS NULL AND valid_until <= ?)",
+        )
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .with_context(|| "Cannot delete expired tokens")?;
+        Ok(())
+    }
+
+    /// Remove from the DB the files for the given ids
+    pub(crate) async fn delete_files<Ids>(&self, ids: Ids) -> Result<()>
+    where
+        Ids: IntoIterator<Item = i64>,
+    {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .with_context(|| "Cannot begin transaction to delete files")?;
+
+        // A loop is fine with sqlite (in a tx, to avoid fsync after each call).
+        // If using a remote DB like postgres, would need
+        // something different, and at that point, this doc may be handy:
+        // https://github.com/launchbadge/sqlx/blob/main/FAQ.md#how-can-i-do-a-select--where-foo-in--query
+        for id in ids {
+            sqlx::query("DELETE from file where id = ?")
+                .bind(id)
+                .execute(&mut tx)
+                .await
+                .with_context(|| format!("Cannot delete db file with id {}", id))?;
+        }
+
+        tx.commit()
+            .await
+            .with_context(|| "Cannot commit transaction to delete files")?;
+        Ok(())
+    }
 }
+
+// CREATE TABLE token
+// ( id INTEGER PRIMARY KEY NOT NULL
+// , path TEXT NOT NULL
+// , max_size_mib INTEGER
+// , valid_until TEXT NOT NULL -- datetime
+// , content_expires_after_hours INTEGER
+// , created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now', 'utc')) -- datetime
+// , deleted_at TEXT -- datetime
+// -- because we can't resume aborted upload, a strictly increasing counter
+// -- is associated to uploaded files, and that allow one to delete stray
+// -- files from previous attempts, without having to invalidate the token.
+// , attempt_counter INTEGER DEFAULT 0
+// , used_at TEXT -- datetime
+// , content_expires_at TEXT -- datetime
+// ) STRICT;
+
+// CREATE TABLE file
+// ( id INTEGER PRIMARY KEY NOT NULL
+// , token_id INTEGER NOT NULL
+// , attempt_counter INTEGER NOT NULL
+// , mime_type TEXT
+// , name TEXT
+// -- identifier to allow different backend, like local filesystem, or S3
+// , backend_type TEXT NOT NULL
+// , backend_data TEXT NOT NULL -- JSON
+// , created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now', 'utc')) -- datetime
+// , completed_at TEXT -- datetime
+// , FOREIGN KEY(token_id) REFERENCES token(id)
+// ) STRICT;
 
 async fn get_valid_token<'t, E>(executor: E, path: &str) -> Result<GetTokenResult>
 where
@@ -354,13 +469,13 @@ where
     Ok(GetTokenResult::NotFound)
 }
 
-async fn get_valid_file<'t, E>(executor: E, path: &str, file_id: i64) -> Result<Option<File>>
+async fn get_valid_file<'t, E>(executor: E, path: &str, file_id: i64) -> Result<Option<DbFile>>
 where
     E: sqlx::SqliteExecutor<'t>,
 {
     let now = time::OffsetDateTime::now_utc();
 
-    sqlx::query_as::<_, File>(
+    sqlx::query_as::<_, DbFile>(
         "SELECT f.* from file as f INNER JOIN token as t ON f.token_id = t.id
         WHERE t.path=?
         AND f.id=?

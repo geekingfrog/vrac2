@@ -199,10 +199,18 @@ impl StorageBackend for LocalFsUploader {
     }
 
     async fn delete_blob(&self, blob_data: Self::Data) -> Result<(), AppError> {
-        fs::remove_file(&blob_data.path)
-            .await
-            .with_context(|| format!("Cannot delete file at {:?}", &blob_data.path))?;
-        Ok(())
+        match fs::remove_file(&blob_data.path).await {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                // trying to delete something that doesn't exist isn't fatal.
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    tracing::warn!("Blob not found at path {:?}", blob_data.path);
+                    Ok(())
+                } else {
+                    Err(err).with_context(|| format!("Cannot delete file at {:?}", &blob_data.path))
+                }
+            }
+        }
     }
 
     async fn read_blob(&self, blob_data: Self::Data) -> Result<Self::Blob, AppError> {

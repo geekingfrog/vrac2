@@ -15,7 +15,7 @@ use tokio::io::AsyncWrite;
 
 use pin_project::pin_project;
 
-use crate::db::{File, FreshToken, GetTokenResult};
+use crate::db::{DbFile, FreshToken, GetTokenResult};
 use crate::error::Result;
 use crate::handlers::flash_utils::TplFlash;
 use crate::state::AppState;
@@ -62,8 +62,8 @@ struct TplFile {
     name: Option<String>,
 }
 
-impl std::convert::From<File> for TplFile {
-    fn from(f: File) -> Self {
+impl std::convert::From<DbFile> for TplFile {
+    fn from(f: DbFile) -> Self {
         Self {
             id: f.id,
             mime_type: f.mime_type.clone(),
