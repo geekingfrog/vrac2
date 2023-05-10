@@ -32,7 +32,11 @@ pub async fn cleanup(db: &DBService, storage: &LocalFsUploader) -> Result<()> {
     );
 
     db.delete_files(files.iter().map(|f| f.id)).await?;
-    db.delete_expired_tokens(&now).await?;
+    let deleted_ids = db.delete_expired_tokens(&now).await?;
+    tracing::info!(
+        "deleted expired tokens with ids and paths: {:?}",
+        deleted_ids
+    );
 
     Ok(())
 }

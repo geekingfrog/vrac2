@@ -355,18 +355,22 @@ impl DBService {
 
     /// Delete the token in DB that are expired (used or not)
     /// This doesn't do anything with the potential associated files.
-    pub(crate) async fn delete_expired_tokens(&self, now: &OffsetDateTime) -> Result<()> {
-        sqlx::query(
+    pub(crate) async fn delete_expired_tokens(
+        &self,
+        now: &OffsetDateTime,
+    ) -> Result<Vec<(i64, String)>> {
+        let deleted_ids = sqlx::query_as::<_, (i64, String)>(
             "DELETE from token
             WHERE (content_expires_at <= ?)
-            OR (used_at IS NULL AND valid_until <= ?)",
+            OR (used_at IS NULL AND valid_until <= ?)
+            RETURNING id,path",
         )
         .bind(now)
         .bind(now)
-        .execute(&self.pool)
+        .fetch_all(&self.pool)
         .await
         .with_context(|| "Cannot delete expired tokens")?;
-        Ok(())
+        Ok(deleted_ids)
     }
 
     /// Remove from the DB the files for the given ids
