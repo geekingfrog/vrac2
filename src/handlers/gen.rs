@@ -7,6 +7,7 @@ use std::result::Result as StdResult;
 use std::time::Duration;
 use time::OffsetDateTime;
 
+use crate::auth::Admin;
 use crate::error::Result;
 use crate::state::AppState;
 
@@ -40,6 +41,7 @@ pub(crate) struct GenTokenForm {
 pub(crate) async fn get_token(
     flashes: IncomingFlashes,
     State(state): State<AppState>,
+    _: Admin,
 ) -> Result<(IncomingFlashes, Html<String>)> {
     let mut ctx = tera::Context::new();
     let mut flash_messages: Vec<TplFlash<'_>> = Vec::with_capacity(flashes.len());
@@ -71,6 +73,7 @@ pub(crate) async fn get_token(
 pub(crate) async fn create_token(
     State(state): State<AppState>,
     flash: Flash,
+    _: Admin,
     form: StdResult<Form<GenTokenForm>, axum::extract::rejection::FormRejection>,
 ) -> Result<(Flash, Redirect)> {
     let form = match form {

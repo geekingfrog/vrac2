@@ -66,6 +66,13 @@ pub(crate) struct DbFile {
     pub(crate) completed_at: Option<OffsetDateTime>,
 }
 
+#[derive(sqlx::FromRow, Debug)]
+pub(crate) struct Account {
+    pub(crate) id: i64,
+    pub(crate) username: String,
+    pub(crate) phc: String,
+}
+
 /// Must be created before being able to upload files for a given token
 /// it's an opaque structure that forces the user to call
 /// an init function on the db to prepare an upload
@@ -119,7 +126,7 @@ impl DBService {
             Ok(pool) => {
                 tracing::info!("Using sqlite at {}", db_path);
                 Ok(DBService { pool })
-            },
+            }
             Err(err) => Err(AppError::DBInitError {
                 path: db_path.to_owned(),
                 source: err,
@@ -403,6 +410,14 @@ impl DBService {
             .await
             .with_context(|| "Cannot commit transaction to delete files")?;
         Ok(())
+    }
+
+    pub(crate) async fn get_account(&self, username: &str) -> Result<Option<Account>> {
+        sqlx::query_as::<_, Account>("SELECT * from account where username = ?")
+            .bind(username)
+            .fetch_optional(&self.pool)
+            .await
+            .with_context(|| format!("Unable to find account with username {}", username))
     }
 }
 

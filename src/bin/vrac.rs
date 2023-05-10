@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, IpAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
 use axum::Router;

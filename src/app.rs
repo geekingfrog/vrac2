@@ -16,6 +16,8 @@ pub fn build(state: AppState) -> Router<()> {
             "/",
             routing::get(|| async { axum::response::Redirect::temporary("/gen") }),
         )
+        // TODO: instead of an extractor for the admin check, see if that can be done
+        // using a middleware for this route
         .route(
             "/gen",
             routing::get(handlers::gen::get_token).post(handlers::gen::create_token),
