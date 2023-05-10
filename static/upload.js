@@ -72,7 +72,7 @@ function addFile(id) {
   let inputElement = document.createElement("input");
   inputElement.type = "file";
   inputElement.name = `file_${counter}`;
-  inputElement.multiple = true;
+  // inputElement.multiple = true;
 
   p.insertAdjacentElement("afterbegin", inputElement);
   loadImagePreview(inputElement);

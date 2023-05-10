@@ -1,32 +1,48 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, IpAddr};
+use std::str::FromStr;
 
 use axum::Router;
+use clap::Parser;
 use vrac::{app::build, state::AppState};
+
+#[derive(Parser, Debug)]
+#[command(version)]
+struct Cli {
+    #[arg(long, default_value = "./test.sqlite")]
+    sqlite_path: String,
+
+    #[arg(long, default_value = "/tmp/vrac/")]
+    storage_path: String,
+
+    #[arg(long, default_value_t = 8000)]
+    port: u16,
+
+    #[arg(long, default_value = "127.0.0.1")]
+    bind_address: String,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), axum::BoxError> {
     tracing_subscriber::fmt::init();
-    let storage_path = "/tmp/vrac";
-    tokio::fs::create_dir_all(storage_path).await?;
 
-    let db_path = "test.sqlite";
+    let cli = Cli::parse();
+
+    tracing::info!("Local fs for storage at {}", cli.storage_path);
+    tokio::fs::create_dir_all(&cli.storage_path).await?;
+
     tokio::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(db_path)
+        .open(&cli.sqlite_path)
         .await?;
 
-    let state = AppState::new("templates/**/*.html", db_path, storage_path).await?;
+    let state = AppState::new("templates/**/*.html", &cli.sqlite_path, &cli.storage_path).await?;
     state.db.migrate().await?;
 
-    // let app = build(state.clone());
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+    let addr = IpAddr::from_str(&cli.bind_address)?;
+    let addr = SocketAddr::from((addr, cli.port));
     let app = build(state.clone());
-    // tracing::info!("Listening on {}", addr);
-    // axum::Server::bind(&addr)
-    //     .serve(app.into_make_service())
-    //     .await?;
 
     tokio::try_join!(
         webserver(addr, app),

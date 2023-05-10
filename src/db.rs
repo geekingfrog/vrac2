@@ -116,7 +116,10 @@ impl DBService {
             .connect(db_path)
             .await;
         match pool_res {
-            Ok(pool) => Ok(DBService { pool }),
+            Ok(pool) => {
+                tracing::info!("Using sqlite at {}", db_path);
+                Ok(DBService { pool })
+            },
             Err(err) => Err(AppError::DBInitError {
                 path: db_path.to_owned(),
                 source: err,
