@@ -13,11 +13,19 @@ pub fn build(state: AppState) -> Router<()> {
     Router::new()
         .layer(service)
         .route(
+            "/",
+            routing::get(|| async { axum::response::Redirect::temporary("/gen") }),
+        )
+        .route(
             "/gen",
             routing::get(handlers::gen::get_token).post(handlers::gen::create_token),
         )
         .merge(
             Router::new()
+                .route(
+                    "/f",
+                    routing::get(|| async { axum::response::Redirect::temporary("/gen") }),
+                )
                 .route(
                     "/f/:path",
                     routing::get(handlers::upload::get_upload_form)
