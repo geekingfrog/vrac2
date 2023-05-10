@@ -6,7 +6,7 @@ use axum::response::{Redirect, Response};
 use axum::{extract::State, response::Html, response::IntoResponse};
 use axum_flash::IncomingFlashes;
 use humantime::format_duration;
-use time::{OffsetDateTime, Duration};
+use time::{Duration, OffsetDateTime};
 
 // use futures_util::stream::TryStreamExt;
 use futures::TryStreamExt;
@@ -205,6 +205,7 @@ pub(crate) async fn post_upload_form(
     };
     let token = state.db.initiate_upload(token).await?;
 
+    let mut total_bytes = 0;
     let mut file_idx = 0;
     while let Some(field) = multipart.next_field().await? {
         file_idx += 1;
@@ -239,22 +240,38 @@ pub(crate) async fn post_upload_form(
 
         let reader =
             field.map_err(|err| std::io::Error::new(ErrorKind::Other, format!("oops {err:?}")));
-        let byte_copied = futures::io::copy_buf(&mut reader.into_async_read(), &mut writer).await?;
+        let bytes_copied =
+            futures::io::copy_buf(&mut reader.into_async_read(), &mut writer).await?;
+        total_bytes += bytes_copied;
 
-        let mb_data = state.storage_fs.finalize_upload(writer).await?;
-        state
-            .db
-            .finalise_file_upload(
-                db_file,
-                mb_data.map(|d| serde_json::to_string(&d)).transpose()?,
-            )
-            .await?;
+        if bytes_copied == 0 {
+            tracing::info!("No bytes uploaded for token {} - {}", token.id, token.path);
+            state.storage_fs.delete_blob(data).await?;
+            state.db.delete_files([db_file.id]).await?;
+        } else {
+            let mb_data = state.storage_fs.finalize_upload(writer).await?;
+            state
+                .db
+                .finalise_file_upload(
+                    db_file,
+                    mb_data.map(|d| serde_json::to_string(&d)).transpose()?,
+                )
+                .await?;
 
-        tracing::info!("total uploaded for field: {}Kib", byte_copied / 1024);
+            tracing::info!("total uploaded for field: {}Kib", bytes_copied / 1024);
+        }
     }
 
-    state.db.finalise_token_upload(token).await?;
-    tracing::info!("done with upload");
+    if total_bytes == 0 {
+        tracing::info!(
+            "No bytes uploaded at all for token {} - {}",
+            token.id,
+            token.path
+        );
+    } else {
+        state.db.finalise_token_upload(token).await?;
+        tracing::info!("done with upload");
+    }
 
     // TODO: maybe use https://docs.rs/axum/0.6.0-rc.4/axum/extract/struct.OriginalUri.html
     // instead of reconstructing the path here
