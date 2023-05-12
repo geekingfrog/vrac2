@@ -67,10 +67,10 @@ pub(crate) struct DbFile {
 }
 
 #[derive(sqlx::FromRow, Debug)]
-pub(crate) struct Account {
-    pub(crate) id: i64,
-    pub(crate) username: String,
-    pub(crate) phc: String,
+pub struct Account {
+    pub id: i64,
+    pub username: String,
+    pub phc: String,
 }
 
 /// Must be created before being able to upload files for a given token
@@ -104,7 +104,7 @@ pub(crate) enum GetTokenResult {
 pub(crate) struct FreshToken(pub(crate) DbToken);
 
 impl DBService {
-    pub(crate) async fn new(db_path: &str) -> Result<Self> {
+    pub async fn new(db_path: &str) -> Result<Self> {
         let pool_res = SqlitePoolOptions::new()
             .max_connections(2)
             .after_connect(|conn, _meta| {
@@ -132,6 +132,13 @@ impl DBService {
                 source: err,
             }),
         }
+    }
+
+    /// close the underlying connection pool. This is required when
+    /// running a short query in a self contained binary, since
+    /// some transaction may not have been flushed to disk yet
+    pub async fn close(&self) {
+        self.pool.close().await;
     }
 
     pub async fn migrate(&self) -> Result<()> {
@@ -418,6 +425,33 @@ impl DBService {
             .fetch_optional(&self.pool)
             .await
             .with_context(|| format!("Unable to find account with username {}", username))
+    }
+
+    pub async fn create_account(&self, username: &str, phc: &str) -> Result<Account> {
+        sqlx::query_as::<_, Account>(
+            "INSERT INTO account
+            (username, phc) VALUES (?,?)
+            RETURNING *",
+        )
+        .bind(username)
+        .bind(phc)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("Unable to create account with username {username}"))
+    }
+
+    pub async fn change_password(&self, username: &str, phc: &str) -> Result<Account> {
+        sqlx::query_as::<_, Account>(
+            "UPDATE account
+            SET phc=?
+            WHERE username = ?
+            RETURNING *",
+        )
+        .bind(phc)
+        .bind(username)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("Unable to update account with username {username}"))
     }
 }
 

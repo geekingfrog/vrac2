@@ -5,7 +5,6 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum_auth::AuthBasic;
-use hyper::header::HeaderName;
 use hyper::{HeaderMap, StatusCode};
 use password_hash::PasswordHash;
 use scrypt::password_hash::PasswordVerifier;

@@ -18,6 +18,7 @@ hyper = "0.14.20"
 parking_lot = "0.12.1"
 password-hash = "0.5.0"
 pin-project = "1.0.12"
+rpassword = "7.2.0"
 scrypt = "0.11.0"
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.87"
@@ -37,6 +38,10 @@ urlencoding = "2.1.2"
 [[bin]]
 name = "split"
 path = "src/bin/split.rs"
+
+[[bin]]
+name = "vracadmin"
+path = "src/bin/admin.rs"
 
 [[bin]]
 name = "vrac"
