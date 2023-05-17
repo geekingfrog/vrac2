@@ -1,7 +1,9 @@
-use axum::response::Redirect;
+use axum::http::HeaderValue;
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Form;
 use axum::{extract::State, response::Html};
-use axum_flash::{Flash, IncomingFlashes, Level};
+use axum_flash::{Flash, IncomingFlashes};
+use hyper::{HeaderMap, StatusCode};
 use serde::{Deserialize, Deserializer};
 use std::result::Result as StdResult;
 use std::time::Duration;
@@ -9,9 +11,10 @@ use time::OffsetDateTime;
 
 use crate::auth::Admin;
 use crate::error::Result;
+use crate::handlers::flash_utils::NotifLevel;
 use crate::state::AppState;
 
-use super::flash_utils::TplFlash;
+use super::flash_utils::Notif;
 
 // need the serialize_with bits to ensure we serialize into a string.
 // because a browser will send these fields as string, this ensure consistent
@@ -44,20 +47,15 @@ pub(crate) async fn get_token(
     _: Admin,
 ) -> Result<(IncomingFlashes, Html<String>)> {
     let mut ctx = tera::Context::new();
-    let mut flash_messages: Vec<TplFlash<'_>> = Vec::with_capacity(flashes.len());
-
-    for (level, msg) in &flashes {
-        if level == Level::Info {
-            if let Ok::<GenTokenForm, _>(x) = serde_json::from_str(msg) {
-                ctx.insert("full_form", &x);
-            } else {
-                flash_messages.push((level, msg).into());
-            }
-        } else {
-            flash_messages.push((level, msg).into());
-        }
+    let mut notifications = Vec::with_capacity(flashes.len());
+    for (level, message) in &flashes {
+        notifications.push(Notif {
+            level: level.into(),
+            message: message.to_owned(),
+        })
     }
-    ctx.insert("flash_messages", &flash_messages);
+
+    ctx.insert("notifications", &notifications);
 
     Ok((
         flashes,
@@ -69,21 +67,26 @@ pub(crate) async fn get_token(
     ))
 }
 
-#[tracing::instrument(skip(state, form), level = "debug")]
+#[tracing::instrument(skip(state, form, flash), level = "debug")]
 pub(crate) async fn create_token(
     State(state): State<AppState>,
     flash: Flash,
     _: Admin,
     form: StdResult<Form<GenTokenForm>, axum::extract::rejection::FormRejection>,
-) -> Result<(Flash, Redirect)> {
+) -> Result<(Flash, Response)> {
+    // ) -> Result<Response> {
     let form = match form {
         Ok(Form(f)) => f,
         Err(err) => {
             tracing::error!("Invalid form submitted {err:?}");
             let flash = flash.error(&format!("Invalid request submitted: {err:?}"));
-            // TODO, don't return a redirect to the same url, but instead
-            // render the page again.
-            return Ok((flash, Redirect::to("/gen")));
+            let ctx = tera::Context::new();
+            let page: Html<String> = state
+                .templates
+                .read()
+                .render("get_gen_token.html", &ctx)?
+                .into();
+            return Ok((flash, (StatusCode::BAD_REQUEST, page).into_response()));
         }
     };
 
@@ -103,20 +106,45 @@ pub(crate) async fn create_token(
     );
 
     match r {
-        // TODO, don't return a redirect to the same url, but instead
-        // render the page again.
-        // This avoid having to serialize the form into a flash (very meh)
-        // and streamline the validation
-        Err(crate::db::TokenError::AlreadyExist) => Ok((
-            flash
-                .error("A valid token already exist for this path.")
-                .info(serde_json::to_string(&form).unwrap()),
-            Redirect::to("/gen"),
-        )),
-        Ok(tok) => Ok((
-            flash.success("Token created."),
-            Redirect::to(&format!("/f/{}", urlencoding::encode(&tok.path))),
-        )),
+        Err(crate::db::TokenError::AlreadyExist) => {
+            let mut ctx = tera::Context::new();
+            tracing::debug!("serializing form into context: {:?}", form);
+            ctx.insert("full_form", &form);
+            ctx.insert(
+                "notifications",
+                &vec![Notif {
+                    level: NotifLevel::Error,
+                    message: "A valid token already exist for this path.".to_string(),
+                }],
+            );
+            let page: Html<String> = state
+                .templates
+                .read()
+                .render("get_gen_token.html", &ctx)?
+                .into();
+
+            Ok((
+                flash.error("A valid token already exist for this path."),
+                (StatusCode::CONFLICT, page).into_response(),
+            ))
+        }
+        Ok(tok) => {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::LOCATION,
+                HeaderValue::from_str(&format!(
+                    "http://localhost:8000/f/{}",
+                    urlencoding::encode(&tok.path)
+                ))
+                .unwrap(),
+            );
+
+            Ok((
+                flash.success("Token created."),
+                Redirect::temporary(&format!("/f/{}", urlencoding::encode(&tok.path)))
+                    .into_response(),
+            ))
+        }
     }
 }
 

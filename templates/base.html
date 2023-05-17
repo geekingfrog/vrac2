@@ -12,10 +12,10 @@
   <body>
     {% block body %}
 
-    {% if flash_messages %}
-      {% for flash in flash_messages %}
-        {% if flash.level != "Debug" %}
-        <p class="notif {{flash.level}}">{{flash.message}}</p>
+    {% if notifications %}
+      {% for notif in notifications %}
+        {% if notif.level != "Debug" %}
+        <p class="notif {{notif.level}}">{{notif.message}}</p>
         {% endif %}
       {% endfor %}
     {% endif %}

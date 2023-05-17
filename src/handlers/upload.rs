@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::io::ErrorKind;
 
 use axum::extract::{Multipart, Path};
@@ -10,14 +9,13 @@ use time::{Duration, OffsetDateTime};
 
 // use futures_util::stream::TryStreamExt;
 use futures::TryStreamExt;
-use tokio::fs::OpenOptions;
 use tokio::io::AsyncWrite;
 
 use pin_project::pin_project;
 
-use crate::db::{DbFile, FreshToken, GetTokenResult};
+use crate::db::{DbFile, GetTokenResult};
 use crate::error::Result;
-use crate::handlers::flash_utils::TplFlash;
+use crate::handlers::flash_utils::ctx_from_flashes;
 use crate::state::AppState;
 use crate::upload::{InitFile, StorageBackend};
 
@@ -104,15 +102,7 @@ pub(crate) async fn get_upload_form(
             let duration = tok.valid_until - now;
             let duration = std::time::Duration::from_secs(duration.as_seconds_f64().round() as u64);
 
-            let mut ctx = tera::Context::new();
-
-            let flash_messages = incoming_flashes
-                .iter()
-                .map(|x| x.into())
-                .collect::<Vec<TplFlash>>();
-
-            ctx.insert("flash_messages", &flash_messages);
-            tracing::info!("flash messages in context: {flash_messages:?}");
+            let mut ctx = ctx_from_flashes(&incoming_flashes);
             ctx.insert("max_size", &tok.max_size_mib);
             ctx.insert("valid_for", &format_duration(duration).to_string());
             if let Some(d) = tok.content_expires_after_hours {

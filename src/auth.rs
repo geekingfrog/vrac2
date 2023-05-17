@@ -51,7 +51,6 @@ impl Admin {
             Err(_) => unreachable!("Infallible"),
         };
 
-        tracing::debug!("received username {username} and {password:?}");
         let password = match password {
             Some(p) => p,
             None => return Err(StatusCode::UNAUTHORIZED.into_response()),

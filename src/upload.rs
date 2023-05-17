@@ -1,5 +1,5 @@
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -16,6 +16,7 @@ use crate::error::AppError;
 // It's a combination of the token information and index of the file since multiple file
 // can be uploaded using the same token
 // as well as some optional file metadata coming from the uploading client
+#[allow(dead_code)]
 pub(crate) struct InitFile<'token, 'file> {
     pub(crate) token_id: i64,
     pub(crate) token_path: &'token str,

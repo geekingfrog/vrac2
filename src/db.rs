@@ -1,6 +1,5 @@
 use sqlx::types::time::OffsetDateTime;
-use sqlx::Transaction;
-use sqlx::{sqlite::SqlitePoolOptions, Executor, Pool, Row, Sqlite};
+use sqlx::{sqlite::SqlitePoolOptions, Executor, Pool, Sqlite};
 use std::result::Result as StdResult;
 
 use crate::error::{AppError, DBErrorContext, Result};
@@ -11,6 +10,7 @@ pub struct DBService {
 }
 
 #[derive(sqlx::FromRow, Debug)]
+#[allow(dead_code)]
 pub(crate) struct DbToken {
     pub(crate) id: i64,
     /// the path in the url
@@ -54,6 +54,7 @@ pub(crate) struct CreateToken<'input> {
 }
 
 #[derive(sqlx::FromRow, Debug)]
+#[allow(dead_code)]
 pub(crate) struct DbFile {
     pub(crate) id: i64,
     pub(crate) token_id: i64,
@@ -100,8 +101,6 @@ pub(crate) enum GetTokenResult {
     /// token exists, is valid, and can be used to see/display stuff
     Used(DbToken),
 }
-
-pub(crate) struct FreshToken(pub(crate) DbToken);
 
 impl DBService {
     pub async fn new(db_path: &str) -> Result<Self> {

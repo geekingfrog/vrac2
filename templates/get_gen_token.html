@@ -9,7 +9,12 @@
 
     <div>
       <label for="path">Path</label>
-      <input name="path" id="path" type="text" size="42" maxLength="40" spellcheck="no" required value="coucou">
+      <input name="path" id="path" type="text" size="42" maxLength="40" spellcheck="no" required
+      {% if full_form and full_form['path'] %}
+      value="{{full_form['path']}}"
+      {% else %}
+      value="coucou"
+      {% endif %}>
     </div>
 
     <hr>
