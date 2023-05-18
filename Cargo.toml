@@ -16,6 +16,7 @@ futures = "0.3.25"
 futures-util = "0.3.25"
 humantime = "2.1.0"
 hyper = { version = "0.14.20", features = ["client"] }
+hyper-tls = "0.5.0"
 mpart-async = "0.6.1"
 parking_lot = "0.12.1"
 password-hash = "0.5.0"

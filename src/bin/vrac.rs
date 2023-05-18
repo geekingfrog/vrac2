@@ -1,3 +1,4 @@
+use std::env;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -6,6 +7,7 @@ use axum::Router;
 use base64::Engine;
 use clap::{Parser, Subcommand};
 use hyper::{Body, Request};
+use hyper_tls::HttpsConnector;
 use mpart_async::client::MultipartRequest;
 use vrac::handlers::gen::GenTokenForm;
 use vrac::{app::build, state::AppState};
@@ -42,6 +44,12 @@ enum Command {
 
         #[arg(long)]
         name: Option<String>,
+
+        #[arg(long, default_value_t = 48)]
+        expires_hours: i64,
+
+        #[arg(short, long, default_value_t = false)]
+        no_expires: bool,
     },
 }
 
@@ -62,7 +70,9 @@ async fn main() -> BoxResult<()> {
             path,
             base_url,
             name,
-        } => upload(path, base_url, name).await,
+            expires_hours,
+            no_expires,
+        } => upload(path, base_url, name, expires_hours, no_expires).await,
     }
 }
 
@@ -115,28 +125,46 @@ async fn background_cleanup(
     }
 }
 
-async fn upload(path: PathBuf, base_url: String, name: Option<String>) -> BoxResult<()> {
-    let client = hyper::Client::new();
-
+async fn upload(
+    path: PathBuf,
+    base_url: String,
+    name: Option<String>,
+    expires_hours: i64,
+    no_expires: bool,
+) -> BoxResult<()> {
     let base_url = url::Url::parse(&base_url)?;
+
+    let https = HttpsConnector::new();
+    let client = hyper::Client::builder().build::<_, hyper::Body>(https);
+
     let mut gen_url = base_url.clone();
     gen_url.set_path("/gen");
 
-    let raw_auth = format!("{}:{}", "test", "testpassword");
+    let username =
+        env::var("VRAC_USERNAME").map_err(|e| format!("VRAC_USERNAME not found {e:?}"))?;
+    let password =
+        env::var("VRAC_PASSWORD").map_err(|e| format!("VRAC_PASSWORD not found {e:?}"))?;
+
+    let raw_auth = format!("{}:{}", username, password);
     let encoded_auth = base64::engine::general_purpose::STANDARD_NO_PAD.encode(raw_auth.as_bytes());
 
     let filename = name
         .or_else(|| path.file_name().map(|s| s.to_string_lossy().into_owned()))
         .ok_or_else(|| "Cannot get filename")?;
 
+    let content_expires_after_hours = if no_expires {
+        None
+    } else {
+        Some(expires_hours)
+    };
+
     let form = GenTokenForm {
         path: filename,
         max_size_mib: None,
-        content_expires_after_hours: Some(48),
+        content_expires_after_hours,
         token_valid_for_hour: 1,
     };
 
-    // TODO: don't use multipart here but instead application/www-form-urlencoded
     let request = Request::post(hyper::Uri::from_str(gen_url.as_str()).unwrap())
         .header(
             hyper::header::CONTENT_TYPE,
@@ -164,6 +192,7 @@ async fn upload(path: PathBuf, base_url: String, name: Option<String>) -> BoxRes
 
     let mut mparts = MultipartRequest::default();
     mparts.add_file("file_1", path);
+
     let request = Request::post(hyper::Uri::from_str(upload_url.as_str()).unwrap())
         .header(
             hyper::header::CONTENT_TYPE,

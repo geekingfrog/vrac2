@@ -207,6 +207,7 @@ pub(crate) async fn post_upload_form(
         );
 
         let mime_type = field.content_type();
+        tracing::info!("mime type: {mime_type:?}");
         let init_file = InitFile {
             token_id: token.id,
             token_path: &token.path,
