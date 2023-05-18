@@ -5,7 +5,8 @@ use std::str::FromStr;
 use axum::Router;
 use base64::Engine;
 use clap::{Parser, Subcommand};
-use mpart_async::client::{ByteStream, MultipartRequest};
+use hyper::{Body, Request};
+use mpart_async::client::MultipartRequest;
 use vrac::handlers::gen::GenTokenForm;
 use vrac::{app::build, state::AppState};
 
@@ -38,6 +39,9 @@ enum Command {
 
         #[arg(long, default_value = "https://vrac.geekingfrog.com")]
         base_url: String,
+
+        #[arg(long)]
+        name: Option<String>,
     },
 }
 
@@ -54,7 +58,11 @@ async fn main() -> BoxResult<()> {
             port,
             bind_address,
         } => serve(sqlite_path, storage_path, port, bind_address).await,
-        Command::Upload { path, base_url } => upload(path, base_url).await,
+        Command::Upload {
+            path,
+            base_url,
+            name,
+        } => upload(path, base_url, name).await,
     }
 }
 
@@ -107,37 +115,29 @@ async fn background_cleanup(
     }
 }
 
-async fn upload(path: PathBuf, base_url: String) -> BoxResult<()> {
+async fn upload(path: PathBuf, base_url: String, name: Option<String>) -> BoxResult<()> {
     let client = hyper::Client::new();
-    // let base_uri = Uri::from_static("http://localhost:8000");
-    // let parts = base_uri.into_parts();
 
-    let base_url = url::Url::parse("http://localhost:8000")?;
+    let base_url = url::Url::parse(&base_url)?;
     let mut gen_url = base_url.clone();
     gen_url.set_path("/gen");
 
     let raw_auth = format!("{}:{}", "test", "testpassword");
     let encoded_auth = base64::engine::general_purpose::STANDARD_NO_PAD.encode(raw_auth.as_bytes());
 
-    println!("{:?}", gen_url);
-    println!("{}", gen_url);
-
-    // let mut mparts: MultipartRequest<ByteStream> = MultipartRequest::default();
-    // mparts.add_field("path", "todo-filename");
-    // mparts.add_field("max-size-mib", "1024");
-    // // default to 2 days for the content before expiration
-    // mparts.add_field("content-expires", "48");
-    // mparts.add_field("token-valid-for-hour", "1");
+    let filename = name
+        .or_else(|| path.file_name().map(|s| s.to_string_lossy().into_owned()))
+        .ok_or_else(|| "Cannot get filename")?;
 
     let form = GenTokenForm {
-        path: "coucou8".to_string(),
+        path: filename,
         max_size_mib: None,
         content_expires_after_hours: Some(48),
         token_valid_for_hour: 1,
     };
 
     // TODO: don't use multipart here but instead application/www-form-urlencoded
-    let request = hyper::Request::post(hyper::Uri::from_str(gen_url.as_str()).unwrap())
+    let request = Request::post(hyper::Uri::from_str(gen_url.as_str()).unwrap())
         .header(
             hyper::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
@@ -150,11 +150,37 @@ async fn upload(path: PathBuf, base_url: String) -> BoxResult<()> {
 
     let response = client.request(request).await?;
     let status_code = response.status();
-    println!("got response status: {:?}", status_code);
-    if status_code != hyper::StatusCode::SEE_OTHER {
-        println!("oops");
+    if !status_code.is_redirection() {
         return Err(format!("Couldn't create token, got status code: {}", status_code).into());
     }
 
+    let location = response
+        .headers()
+        .get(hyper::header::LOCATION)
+        .ok_or("No location returned")?;
+
+    let mut upload_url = base_url.clone();
+    upload_url.set_path(location.to_str()?);
+
+    let mut mparts = MultipartRequest::default();
+    mparts.add_file("file_1", path);
+    let request = Request::post(hyper::Uri::from_str(upload_url.as_str()).unwrap())
+        .header(
+            hyper::header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={}", mparts.get_boundary()),
+        )
+        .body(Body::wrap_stream(mparts))?;
+
+    let response = client.request(request).await?;
+
+    let status = response.status();
+    if !status.is_redirection() {
+        let body = hyper::body::to_bytes(response).await?;
+        let strbody = String::from_utf8(body.to_vec())?;
+        return Err(format!("Couldn't upload files {}\n{}", status, strbody).into());
+    }
+
+    // output the final url as a result
+    println!("{}", upload_url);
     Ok(())
 }
