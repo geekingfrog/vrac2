@@ -148,7 +148,7 @@ checksum = "620b37645b77baab8160f93421568d7b3dd25da0a160fab38eb1c4ef611f6d98"
 dependencies = [
  "async-trait",
  "axum-core",
- "base64",
+ "base64 0.13.0",
  "http",
 ]
 
@@ -198,7 +198,7 @@ dependencies = [
  "async-trait",
  "axum-core",
  "axum-extra",
- "base64",
+ "base64 0.13.0",
  "cookie",
  "http",
  "serde",
@@ -212,6 +212,12 @@ name = "base64"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
+
+[[package]]
+name = "base64"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4a4ddaa51a5bc52a6948f74c06d20aaaddb71924eab79b8c97a8c556e942d6a"
 
 [[package]]
 name = "base64ct"
@@ -381,7 +387,7 @@ version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "344adc371239ef32293cb1c4fe519592fcf21206c79c02854320afcdf3ab4917"
 dependencies = [
- "base64",
+ "base64 0.13.0",
  "hmac",
  "percent-encoding",
  "rand",
@@ -1126,6 +1132,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "mpart-async"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ea6ab2359d45d2401bd7ba5ce5a67582f2abb872ea9ec17f78efb6ac3591864"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http",
+ "httparse",
+ "log",
+ "memchr",
+ "mime_guess",
+ "percent-encoding",
+ "pin-project-lite",
+ "rand",
+ "thiserror",
+ "tokio",
+ "tokio-util 0.6.10",
+]
+
+[[package]]
 name = "multer"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1592,7 +1620,7 @@ version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0864aeff53f8c05aa08d86e5ef839d3dfcf07aeba2db32f12db0ef716e87bd55"
 dependencies = [
- "base64",
+ "base64 0.13.0",
 ]
 
 [[package]]
@@ -2102,6 +2130,20 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
+version = "0.6.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36943ee01a6d67977dd3f84a5a1d2efeb4ada3a1ae771cadfaa535d9d9fc6507"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "log",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-util"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5427d89453009325de0d8f342c9490009f76e999cb7672d77e46267448f7e6b2"
@@ -2148,7 +2190,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "tokio",
- "tokio-util",
+ "tokio-util 0.7.7",
  "tower",
  "tower-layer",
  "tower-service",
@@ -2410,12 +2452,14 @@ dependencies = [
  "axum",
  "axum-auth",
  "axum-flash",
+ "base64 0.21.0",
  "bytes",
  "clap",
  "futures",
  "futures-util",
  "humantime",
  "hyper",
+ "mpart-async",
  "parking_lot 0.12.1",
  "password-hash",
  "pin-project",
@@ -2423,16 +2467,18 @@ dependencies = [
  "scrypt",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sqlx",
  "tera",
  "thiserror",
  "time",
  "tokio",
- "tokio-util",
+ "tokio-util 0.7.7",
  "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "urlencoding",
 ]
 

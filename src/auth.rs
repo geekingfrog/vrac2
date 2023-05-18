@@ -34,7 +34,6 @@ impl Admin {
     where
         S: Send + Sync + AccountGrabber,
     {
-        tracing::info!("decoding request parts for admin");
         let auth_header: Result<_, Infallible> =
             Option::<AuthBasic>::from_request_parts(parts, state).await;
 
@@ -76,7 +75,10 @@ impl Admin {
             StatusCode::UNAUTHORIZED.into_response()
         })?;
         match Scrypt.verify_password(password.as_bytes(), &parsed_phc) {
-            Ok(_) => Ok(account),
+            Ok(_) => {
+                tracing::info!("Authenticated user {}", account.username);
+                Ok(account)
+            },
             Err(_) => Err(StatusCode::UNAUTHORIZED.into_response()),
         }
     }

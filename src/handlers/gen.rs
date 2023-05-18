@@ -1,9 +1,8 @@
-use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Form;
 use axum::{extract::State, response::Html};
 use axum_flash::{Flash, IncomingFlashes};
-use hyper::{HeaderMap, StatusCode};
+use hyper::StatusCode;
 use serde::{Deserialize, Deserializer};
 use std::result::Result as StdResult;
 use std::time::Duration;
@@ -21,23 +20,24 @@ use super::flash_utils::Notif;
 // serialization. There may be a way to accept both an integer and a string, but
 // I don't know how.
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
-pub(crate) struct GenTokenForm {
-    pub(crate) path: String,
+pub struct GenTokenForm {
+    pub path: String,
     #[serde(
         rename = "max-size-mib",
         deserialize_with = "deserialize_sentinel",
-        serialize_with = "serialize_opt_str"
+        serialize_with = "serialize_opt_str",
+        default
     )]
-    max_size_mib: Option<i64>,
+    pub max_size_mib: Option<i64>,
 
     #[serde(
         rename = "content-expires",
         deserialize_with = "deserialize_sentinel",
         serialize_with = "serialize_opt_str"
     )]
-    content_expires_after_hours: Option<i64>,
+    pub content_expires_after_hours: Option<i64>,
     #[serde(rename = "token-valid-for-hour")]
-    token_valid_for_hour: u64,
+    pub token_valid_for_hour: u64,
 }
 
 #[tracing::instrument(skip(flashes, state), level = "debug")]
@@ -74,7 +74,6 @@ pub(crate) async fn create_token(
     _: Admin,
     form: StdResult<Form<GenTokenForm>, axum::extract::rejection::FormRejection>,
 ) -> Result<(Flash, Response)> {
-    // ) -> Result<Response> {
     let form = match form {
         Ok(Form(f)) => f,
         Err(err) => {
@@ -100,10 +99,6 @@ pub(crate) async fn create_token(
     };
 
     let r = state.db.create_token(ct).await?;
-    tracing::info!(
-        "serialized form is: {}",
-        serde_json::to_string(&form).unwrap()
-    );
 
     match r {
         Err(crate::db::TokenError::AlreadyExist) => {
@@ -128,23 +123,10 @@ pub(crate) async fn create_token(
                 (StatusCode::CONFLICT, page).into_response(),
             ))
         }
-        Ok(tok) => {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                axum::http::header::LOCATION,
-                HeaderValue::from_str(&format!(
-                    "http://localhost:8000/f/{}",
-                    urlencoding::encode(&tok.path)
-                ))
-                .unwrap(),
-            );
-
-            Ok((
-                flash.success("Token created."),
-                Redirect::temporary(&format!("/f/{}", urlencoding::encode(&tok.path)))
-                    .into_response(),
-            ))
-        }
+        Ok(tok) => Ok((
+            flash.success("Token created."),
+            Redirect::to(&format!("/f/{}", urlencoding::encode(&tok.path))).into_response(),
+        )),
     }
 }
 

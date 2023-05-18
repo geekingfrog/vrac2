@@ -182,7 +182,7 @@ impl DBService {
         })?;
 
         let t = get_valid_token(&mut tx, ct.path).await?;
-        tracing::info!("valid token is: {:?}", t);
+        tracing::debug!("valid token for path {} is: {:?}", ct.path, t);
 
         match get_valid_token(&mut tx, ct.path).await? {
             GetTokenResult::Used(t) | GetTokenResult::Fresh(t) => {
