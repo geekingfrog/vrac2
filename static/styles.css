@@ -22,6 +22,12 @@ body {
   background-color: rgba(230,30,0,0.8);
 }
 
+.gen-form {
+  margin: 0 auto;
+  display: block;
+  width: 40rem;
+}
+
 .gen-form .option {
   display: inline-block;
   margin: 0 0.2rem;

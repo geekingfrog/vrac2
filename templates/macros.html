@@ -13,6 +13,8 @@
   </video>
 {% endif %}
 </p>
-<p><a href="{{path}}" download>📥 Download {{file.name}}</a></p>
+<p>
+  <a href="{{path}}" download>📥 Download {{file.name}}</a>{%- if file.mime_type %} ({{file.mime_type}}){% endif %}
+</p>
 
 {% endmacro inline_file %}
