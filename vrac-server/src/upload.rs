@@ -6,9 +6,7 @@ use std::{
 
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-// use futures::AsyncWrite;
 use tokio::fs::{self, File, OpenOptions};
-use tokio::io::AsyncWrite;
 
 use crate::error::AppError;
 
@@ -17,21 +15,21 @@ use crate::error::AppError;
 // can be uploaded using the same token
 // as well as some optional file metadata coming from the uploading client
 #[allow(dead_code)]
-pub(crate) struct InitFile<'token, 'file> {
-    pub(crate) token_id: i64,
-    pub(crate) token_path: &'token str,
-    pub(crate) file_index: u64,
-    pub(crate) attempt_counter: i64,
-    pub(crate) mime_type: Option<&'file str>,
-    pub(crate) file_name: Option<&'file str>,
+pub struct InitFile<'token, 'file> {
+    pub token_id: i64,
+    pub token_path: &'token str,
+    pub file_index: u64,
+    pub attempt_counter: i64,
+    pub mime_type: Option<&'file str>,
+    pub file_name: Option<&'file str>,
 }
 
 /// A trait to persist an upload somewhere. That could be on the local
 /// file system, in a db as raw bytes, in S3 or whatever.
 #[async_trait]
-pub(crate) trait StorageBackend
+pub trait StorageBackend
 where
-    Self::Blob: Send + futures::AsyncWrite + tokio::io::AsyncRead,
+    Self::Blob: Send + tokio::io::AsyncWrite + tokio::io::AsyncRead,
     Self::Data: Serialize + DeserializeOwned,
 {
     /// An internal type that can be used to carry information
@@ -72,7 +70,7 @@ where
     async fn read_blob(&self, blob_data: Self::Data) -> Result<Self::Blob, AppError>;
 }
 
-pub(crate) trait BackendErrorContext<T, E> {
+pub trait BackendErrorContext<T, E> {
     fn with_context<C, F>(self, f: F) -> Result<T, AppError>
     where
         C: ToString + Send + Sync + 'static,
@@ -114,13 +112,13 @@ impl LocalFsUploader {
 }
 
 #[pin_project::pin_project]
-pub(crate) struct LocalFsBlob {
+pub struct LocalFsBlob {
     #[pin]
     inner: File,
     path: PathBuf,
 }
 
-impl futures::AsyncWrite for LocalFsBlob {
+impl tokio::io::AsyncWrite for LocalFsBlob {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -133,7 +131,7 @@ impl futures::AsyncWrite for LocalFsBlob {
         self.project().inner.poll_flush(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         self.project().inner.poll_shutdown(cx)
     }
 }
@@ -149,7 +147,7 @@ impl tokio::io::AsyncRead for LocalFsBlob {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct LocalFsData {
+pub struct LocalFsData {
     path: PathBuf,
     version: u8,
 }

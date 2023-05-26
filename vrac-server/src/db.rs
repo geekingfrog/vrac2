@@ -55,16 +55,16 @@ pub(crate) struct CreateToken<'input> {
 
 #[derive(sqlx::FromRow, Debug)]
 #[allow(dead_code)]
-pub(crate) struct DbFile {
-    pub(crate) id: i64,
-    pub(crate) token_id: i64,
-    pub(crate) attempt_counter: i64,
-    pub(crate) mime_type: Option<String>,
-    pub(crate) name: Option<String>,
-    pub(crate) backend_type: String,
-    pub(crate) backend_data: String,
-    pub(crate) created_at: OffsetDateTime,
-    pub(crate) completed_at: Option<OffsetDateTime>,
+pub struct DbFile {
+    pub id: i64,
+    pub token_id: i64,
+    pub attempt_counter: i64,
+    pub mime_type: Option<String>,
+    pub name: Option<String>,
+    pub backend_type: String,
+    pub backend_data: String,
+    pub created_at: OffsetDateTime,
+    pub completed_at: Option<OffsetDateTime>,
 }
 
 #[derive(sqlx::FromRow, Debug)]
@@ -141,7 +141,9 @@ impl DBService {
     }
 
     pub async fn migrate(&self) -> Result<()> {
+        tracing::info!("starting migration");
         sqlx::migrate!("./migrations").run(&self.pool).await?;
+        tracing::info!("migration done");
         Ok(())
     }
 
@@ -155,7 +157,7 @@ impl DBService {
         get_valid_file(&self.pool, path, file_id).await
     }
 
-    pub(crate) async fn get_files(
+    pub async fn get_files(
         &self,
         token_id: i64,
         attempt_counter: i64,

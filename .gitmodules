@@ -1,0 +1,3 @@
+[submodule "rs-async-zip"]
+	path = rs-async-zip
+	url = git@github.com:geekingfrog/rs-async-zip.git
