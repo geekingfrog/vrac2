@@ -1,11 +1,7 @@
-use async_zip::base::write::owned_writer;
 use async_zip::error::ZipError;
-use async_zip::{Compression, ZipEntry, ZipEntryBuilder};
-use futures::io::BufReader;
+use async_zip::{Compression, ZipEntryBuilder};
 use futures::{AsyncWrite as FAsyncWrite, Future, FutureExt};
-use std::collections::VecDeque;
 use std::io::ErrorKind;
-use std::mem;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
@@ -299,67 +295,6 @@ async fn get_files_html(
     Ok((incoming_flashes, html).into_response())
 }
 
-// can't be arsed to type that so many times
-type InMemWrt = Compat<DuplexStream>;
-struct ZipFiles {
-    state: ZipWriterState,
-    read_buf: Compat<DuplexStream>,
-    entries: VecDeque<(ZipEntry, Box<dyn futures::io::AsyncBufRead + Unpin + Send>)>,
-}
-
-enum ZipWriterState {
-    /// the zip writer is open and ready for new entries to be added
-    Archive(owned_writer::ZipWriterArchive<InMemWrt>),
-    /// in the process of adding a new entry to the archive (writing the headers)
-    OpeningEntry {
-        fut: Pin<
-            Box<
-                dyn Future<Output = StdResult<owned_writer::ZipWriterEntry<InMemWrt>, ZipError>>
-                    + Send,
-            >,
-        >,
-        rdr: Box<dyn futures::io::AsyncBufRead + Unpin + Send>,
-    },
-    /// in the process of copying the bytes from the reader into the zip archive
-    CopyEntry {
-        rdr: Pin<Box<dyn futures::io::AsyncBufRead + Unpin + Send>>,
-        wrt: owned_writer::ZipWriterEntry<Compat<DuplexStream>>,
-    },
-    /// done with the entry, need to write the crc and other metadata after the entry
-    ClosingEntry(
-        Pin<
-            Box<
-                dyn Future<
-                        Output = std::result::Result<
-                            owned_writer::ZipWriterArchive<InMemWrt>,
-                            ZipError,
-                        >,
-                    > + Send,
-            >,
-        >,
-    ),
-    /// done with all the entries, we can finalize the zip archive
-    ClosingArchive(Pin<Box<dyn Future<Output = std::io::Result<usize>> + Send>>),
-    /// the archive is closed, but we may still have bytes in our internal read
-    /// buffer, so need to flush those
-    Flushing,
-    // this variant is merely here because I need a value for mem::replace
-    // otherwise I run into issues when trying to assign a new state while
-    // moving/consumming the old one.
-    Dummy,
-}
-
-impl ZipFiles {
-    fn new(entries: Vec<(ZipEntry, Box<dyn futures::io::AsyncBufRead + Unpin + Send>)>) -> Self {
-        let (rdr, wrt) = tokio::io::duplex(4096);
-        Self {
-            state: ZipWriterState::Archive(owned_writer::ZipWriterArchive::new(wrt.compat_write())),
-            read_buf: rdr.compat(),
-            entries: entries.into(),
-        }
-    }
-}
-
 trait IntoIOError {
     // fn into_io_error<E: std::error::Error + Send + Sync + 'static>(self: E) -> std::io::Error;
     fn into_io_error(self) -> std::io::Error;
@@ -371,157 +306,27 @@ impl IntoIOError for ZipError {
     }
 }
 
-impl futures::io::AsyncRead for ZipFiles {
+#[pin_project]
+struct ZipAsyncReader {
+    #[pin]
+    rdr: Compat<DuplexStream>,
+    fut_wrt: Pin<Box<dyn Future<Output = std::io::Result<()>> + Send>>,
+}
+
+impl futures::io::AsyncRead for ZipAsyncReader {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<std::io::Result<usize>> {
-        // see if we already have some compressed bytes ready to go (or an error)
-        if let Poll::Ready(x) = Pin::new(&mut self.read_buf).poll_read(cx, buf) {
-            match x {
-                Ok(n) if n == 0 => {
-                    // if the archive is closed, and we EOF the internal read buffer
-                    // that means we're completely done and we can return the EOF
-                    if matches!(self.state, ZipWriterState::Flushing) {
-                        return Poll::Ready(Ok(0));
-                    }
-                }
-                x => {
-                    return Poll::Ready(x);
-                }
-            }
-        }
+        // attempt to write more into the buffer
+        match self.fut_wrt.as_mut().poll(cx) {
+            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+            _ => (),
+        };
 
-        // match &self.state {
-        //     ZipWriterState::Archive(_) => tracing::debug!("in state archive"),
-        //     ZipWriterState::OpeningEntry { .. } => tracing::debug!("in state opening entry"),
-        //     ZipWriterState::CopyEntry { .. } => tracing::debug!("in state copy entry"),
-        //     ZipWriterState::ClosingEntry(_) => tracing::debug!("in state closing entry"),
-        //     ZipWriterState::ClosingArchive(_) => tracing::debug!("in state closing archive"),
-        //     ZipWriterState::Flushing => tracing::debug!("in state flushing"),
-        //     ZipWriterState::Dummy => tracing::debug!("in state dummy"),
-        // }
-
-        let state = mem::replace(&mut self.state, ZipWriterState::Dummy);
-
-        // in every branch, we need to be careful of setting the state properly if we're intending
-        // on looping (recursive call)
-        match state {
-            ZipWriterState::Archive(wrt) => {
-                match self.entries.pop_front() {
-                    Some((entry, rdr)) => {
-                        tracing::debug!(
-                            "moving onto the next entry {:?}",
-                            entry.filename().as_str()
-                        );
-                        let writer_entry_fut = wrt.write_entry_stream(entry);
-                        let writer_entry_fut = Box::pin(writer_entry_fut);
-                        self.state = ZipWriterState::OpeningEntry {
-                            fut: writer_entry_fut,
-                            rdr,
-                        };
-                        Pin::new(&mut self).poll_read(cx, buf)
-                    }
-                    None => {
-                        // there are no more entries to write, so we need to close
-                        // the zip archive and we're done
-                        tracing::debug!("no more entry, closing the archive");
-                        let fut = wrt.close().map(|res| match res {
-                            Ok(_) => Ok(0),
-                            Err(err) => Err(err.into_io_error()),
-                        });
-                        self.state = ZipWriterState::ClosingArchive(Box::pin(fut));
-                        Pin::new(&mut self).poll_read(cx, buf)
-                    }
-                }
-            }
-            ZipWriterState::OpeningEntry { mut fut, rdr } => {
-                let wrt = match fut.as_mut().poll(cx) {
-                    Poll::Ready(Ok(writer_entry)) => writer_entry,
-                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err.into_io_error())),
-                    Poll::Pending => {
-                        self.state = ZipWriterState::OpeningEntry { fut, rdr };
-                        return Poll::Pending;
-                    }
-                };
-                self.state = ZipWriterState::CopyEntry {
-                    rdr: Pin::new(rdr),
-                    wrt,
-                };
-                Pin::new(&mut self).poll_read(cx, buf)
-            }
-            ZipWriterState::CopyEntry { mut rdr, mut wrt } => {
-                // this is copied from futures::io::copy_buf, but without the loop
-                // since I want to extract the bytes from the duplexstream asap
-                // and also some annoying state manipulation
-                let buffer = match rdr.as_mut().poll_fill_buf(cx) {
-                    Poll::Ready(x) => x?,
-                    Poll::Pending => {
-                        self.state = ZipWriterState::CopyEntry { rdr, wrt };
-                        return Poll::Pending;
-                    }
-                };
-
-                if buffer.is_empty() {
-                    match Pin::new(&mut wrt).poll_flush(cx) {
-                        Poll::Ready(x) => x?,
-                        Poll::Pending => {
-                            self.state = ZipWriterState::CopyEntry { rdr, wrt };
-                            return Poll::Pending;
-                        }
-                    }
-                    let fut = wrt.close();
-                    self.state = ZipWriterState::ClosingEntry(Box::pin(fut));
-                    return Pin::new(&mut self).poll_read(cx, buf);
-                }
-
-                let i = match Pin::new(&mut wrt).poll_write(cx, buffer) {
-                    Poll::Ready(x) => x?,
-                    Poll::Pending => {
-                        self.state = ZipWriterState::CopyEntry { rdr, wrt };
-                        return Poll::Pending;
-                    }
-                };
-
-                if i == 0 {
-                    return Poll::Ready(Err(std::io::ErrorKind::WriteZero.into()));
-                }
-                rdr.as_mut().consume(i);
-                self.state = ZipWriterState::CopyEntry { rdr, wrt };
-                Pin::new(&mut self).poll_read(cx, buf)
-            }
-            ZipWriterState::ClosingEntry(mut fut) => {
-                let wrt = match fut.as_mut().poll(cx) {
-                    Poll::Ready(Ok(wrt)) => wrt,
-                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err.into_io_error())),
-                    Poll::Pending => {
-                        self.state = ZipWriterState::ClosingEntry(fut);
-                        return Poll::Pending;
-                    }
-                };
-                self.state = ZipWriterState::Archive(wrt);
-                Pin::new(&mut self).poll_read(cx, buf)
-            }
-            ZipWriterState::ClosingArchive(mut fut) => {
-                tracing::debug!("closing the archive");
-                match fut.as_mut().poll(cx) {
-                    Poll::Ready(Ok(_)) => {
-                        self.state = ZipWriterState::Flushing;
-                        Pin::new(&mut self).poll_read(cx, buf)
-                    }
-                    x => {
-                        self.state = ZipWriterState::ClosingArchive(fut);
-                        x
-                    }
-                }
-            }
-            ZipWriterState::Flushing => {
-                self.state = ZipWriterState::Flushing;
-                Pin::new(&mut self).poll_read(cx, buf)
-            }
-            ZipWriterState::Dummy => unreachable!("dummy state should never be reached"),
-        }
+        let n = futures::ready!(self.project().rdr.poll_read(cx, buf))?;
+        Poll::Ready(Ok(n))
     }
 }
 
@@ -537,27 +342,33 @@ async fn get_files_zip(
     //     .clone()
     //     .read_blob(serde_json::from_str(&files[0].backend_data).unwrap());
 
-    let entries = vec![
-        (
-            ZipEntryBuilder::new("dilbert.gif".into(), Compression::Deflate).build(),
-            Box::new(BufReader::new(
-                tokio::fs::File::open("testfiles/dilbert.gif")
-                    .await?
-                    .compat_write(),
-            )) as _,
-        ),
-        (
-            ZipEntryBuilder::new("Suprise [fqyjOc3EpT4].webm".into(), Compression::Deflate).build(),
-            Box::new(BufReader::new(
-                tokio::fs::File::open("testfiles/Suprise [fqyjOc3EpT4].webm")
-                    .await?
-                    .compat_write(),
-            )) as _,
-        ),
-    ];
-    let zip_files = ZipFiles::new(entries);
+    let (rdr, wrt) = tokio::io::duplex(4096);
+    let fut = async move {
+        let mut zip_wrt = async_zip::base::write::ZipFileWriter::new(wrt.compat());
+        for filename in ["dilbert.gif", "Surprise [fqyjOc3EpT4].webm"] {
+            let opts = ZipEntryBuilder::new(filename.into(), Compression::Deflate);
+            let mut entry = zip_wrt
+                .write_entry_stream(opts)
+                .await
+                .map_err(|e| e.into_io_error())?;
+            let rdr = tokio::fs::File::open(format!("testfiles/{}", filename)).await?;
+            futures::io::copy(rdr.compat(), &mut entry).await?;
+            entry.close().await.map_err(|e| e.into_io_error())?;
+        }
 
-    let stream = tokio_util::io::ReaderStream::new(zip_files.compat());
+        zip_wrt.close().await.map_err(|e| e.into_io_error())?;
+
+        let result: std::io::Result<()> = Ok(());
+        result
+    };
+
+    let zar = ZipAsyncReader {
+        rdr: rdr.compat(),
+        fut_wrt: Box::pin(fut.fuse()),
+    };
+
+    let stream = tokio_util::io::ReaderStream::new(zar.compat());
+
     let body = axum::body::StreamBody::new(stream);
     Ok((incoming_flashes, body).into_response())
 }
