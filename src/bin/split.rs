@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_zip::{
-    base::write::{self, owned_writer, EntryStreamWriter, ZipFileWriter},
+    base::write::{self, EntryStreamWriter, ZipFileWriter},
     Compression, ZipEntryBuilder,
 };
 use futures::io::{copy, copy_buf, BufReader, Cursor};

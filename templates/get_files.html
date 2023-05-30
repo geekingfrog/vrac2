@@ -2,7 +2,7 @@
 {% import "macros.html" as macros %}
 
 {% extends "base.html" %}
-{% block title %}Generate an upload link{% endblock title %}
+{% block title %}{{ tok_path }} - files{% endblock title %}
 {% block head %} {{ super() }} {% endblock head %}
 
 {% block body %}
@@ -19,5 +19,11 @@ this page will expires in {{expires_in}} (at {{ expires_at }} UTC)
 {% endfor %}
   </ul>
 
-{% endblock body %}
+{% if files | length > 1 %}
+<hr>
+<p>
+  <a href="./{{tok_path}}?zip" download>📥 Download all files as zip</a>
+</p>
+{% endif %}
 
+{% endblock body %}

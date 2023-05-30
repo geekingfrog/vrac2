@@ -1,6 +1,7 @@
 use async_zip::error::ZipError;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::{AsyncWrite as FAsyncWrite, Future, FutureExt};
+use hyper::{header, HeaderMap};
 use std::io::ErrorKind;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -13,6 +14,7 @@ use axum_flash::IncomingFlashes;
 use humantime::format_duration;
 use serde::{de, Deserialize};
 use time::{Duration, OffsetDateTime};
+use tracing::Instrument;
 
 use futures::TryStreamExt;
 use tokio::io::{AsyncWrite, DuplexStream};
@@ -23,7 +25,7 @@ use tokio_util::compat::{
 use pin_project::pin_project;
 
 use crate::db::{DbFile, DbToken, GetTokenResult};
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use crate::handlers::flash_utils::ctx_from_flashes;
 use crate::state::AppState;
 use crate::upload::{InitFile, StorageBackend};
@@ -79,6 +81,7 @@ impl std::convert::From<DbFile> for TplFile {
     }
 }
 
+#[tracing::instrument(skip(state, incoming_flashes))]
 pub(crate) async fn get_upload_form(
     state: State<AppState>,
     incoming_flashes: IncomingFlashes,
@@ -103,10 +106,15 @@ pub(crate) async fn get_upload_form(
         }
         GetTokenResult::Fresh(tok) => upload_form(state, incoming_flashes, tok).await,
         GetTokenResult::Used(tok) => {
+            let span = tracing::info_span!("token {}-{}", tok.id, tok.path);
             if file_query.zip {
-                get_files_zip(state, incoming_flashes, tok).await
+                get_files_zip(state, incoming_flashes, tok)
+                    .instrument(span)
+                    .await
             } else {
-                get_files_html(state, incoming_flashes, tok).await
+                get_files_html(state, incoming_flashes, tok)
+                    .instrument(span)
+                    .await
             }
         }
     }
@@ -286,6 +294,7 @@ async fn get_files_html(
     let files: Vec<TplFile> = files.into_iter().map(|f| f.into()).collect();
 
     ctx.insert("files", &files);
+    ctx.insert("tok_path", &tok.path);
 
     let html: Html<String> = state
         .templates
@@ -302,6 +311,13 @@ trait IntoIOError {
 
 impl IntoIOError for ZipError {
     fn into_io_error(self) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::Other, self)
+    }
+}
+
+impl IntoIOError for crate::error::AppError {
+    fn into_io_error(self) -> std::io::Error {
+        tracing::error!("app error into IoError {:?}", self);
         std::io::Error::new(std::io::ErrorKind::Other, self)
     }
 }
@@ -342,18 +358,33 @@ async fn get_files_zip(
     //     .clone()
     //     .read_blob(serde_json::from_str(&files[0].backend_data).unwrap());
 
+    let state = state.clone();
     let (rdr, wrt) = tokio::io::duplex(4096);
     let fut = async move {
         let mut zip_wrt = async_zip::base::write::ZipFileWriter::new(wrt.compat());
-        for filename in ["dilbert.gif", "Surprise [fqyjOc3EpT4].webm"] {
-            let opts = ZipEntryBuilder::new(filename.into(), Compression::Deflate);
-            let mut entry = zip_wrt
-                .write_entry_stream(opts)
-                .await
-                .map_err(|e| e.into_io_error())?;
-            let rdr = tokio::fs::File::open(format!("testfiles/{}", filename)).await?;
-            futures::io::copy(rdr.compat(), &mut entry).await?;
-            entry.close().await.map_err(|e| e.into_io_error())?;
+        for file in files {
+            match file.backend_type.as_str() {
+                "local_fs" => {
+                    let data = serde_json::from_str(&file.backend_data)?;
+                    let blob = state
+                        .storage_fs
+                        .read_blob(data)
+                        .await
+                        .map_err(|e| e.into_io_error())?;
+                    let filename = file.name.unwrap_or_else(|| format!("{}", file.id));
+                    let opts = ZipEntryBuilder::new(filename.into(), Compression::Deflate);
+                    let mut entry = zip_wrt
+                        .write_entry_stream(opts)
+                        .await
+                        .map_err(|e| e.into_io_error())?;
+                    futures::io::copy(blob.compat(), &mut entry).await?;
+                    entry.close().await.map_err(|e| e.into_io_error())?;
+                }
+                x => {
+                    tracing::error!("Unexpected backend type {} for file {}", x, file.id);
+                    return Err(AppError::UnknownStorageBackend(x.to_string()).into_io_error());
+                }
+            }
         }
 
         zip_wrt.close().await.map_err(|e| e.into_io_error())?;
@@ -368,9 +399,18 @@ async fn get_files_zip(
     };
 
     let stream = tokio_util::io::ReaderStream::new(zar.compat());
-
     let body = axum::body::StreamBody::new(stream);
-    Ok((incoming_flashes, body).into_response())
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{}.zip\"", tok.path)
+            .parse()
+            .unwrap(),
+    );
+
+    Ok((incoming_flashes, (headers, body)).into_response())
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
