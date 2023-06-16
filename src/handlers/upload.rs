@@ -336,7 +336,7 @@ impl futures::io::AsyncRead for ZipAsyncReader {
         buf: &mut [u8],
     ) -> Poll<std::io::Result<usize>> {
         // attempt to write more into the buffer
-        match self.fut_wrt.as_mut().poll(cx) {
+        match self.fut_wrt.poll_unpin(cx) {
             Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
             _ => (),
         };
@@ -352,11 +352,6 @@ async fn get_files_zip(
     tok: DbToken,
 ) -> Result<Response> {
     let files = state.db.get_files(tok.id, tok.attempt_counter).await?;
-
-    // let mut fut = state
-    //     .storage_fs
-    //     .clone()
-    //     .read_blob(serde_json::from_str(&files[0].backend_data).unwrap());
 
     let state = state.clone();
     let (rdr, wrt) = tokio::io::duplex(4096);
