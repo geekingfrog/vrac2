@@ -9,7 +9,7 @@ use tokio_util::io::ReaderStream;
 use crate::{
     error::{AppError, Result},
     state::AppState,
-    upload::{LocalFsData, StorageBackend},
+    upload::{LocalFsData, StorageBackend, GarageData},
 };
 
 #[derive(serde::Deserialize, Debug)]
@@ -56,16 +56,25 @@ pub(crate) async fn get_file(
             .unwrap(),
     );
 
-    if file.backend_type.as_str() != "local_fs" {
-        return Err(AppError::UnknownStorageBackend(
-            file.backend_type.to_string(),
-        ));
-    }
+    let blob: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match file.backend_type.as_str() {
+        "local_fs" => {
+            let backend_data: LocalFsData = serde_json::from_str(&file.backend_data)?;
+            let blob = state.storage_fs.read_blob(backend_data).await?;
+            Box::new(blob)
+        }
+        "garage" => {
+            let backend_data: GarageData = serde_json::from_str(&file.backend_data)?;
+            let blob = state.garage.read_blob(backend_data).await?;
+            Box::new(blob)
+        }
+        wut => {
+            tracing::warn!("Unknown storage backend: {wut}");
+            return Err(AppError::UnknownStorageBackend(wut.to_string()));
+        }
+    };
 
     // stream an AsyncRead as a response
     // https://github.com/tokio-rs/axum/discussions/608
-    let backend_data: LocalFsData = serde_json::from_str(&file.backend_data)?;
-    let blob = state.storage_fs.read_blob(backend_data).await?;
     let stream = ReaderStream::new(blob);
     let body = StreamBody::new(stream);
 

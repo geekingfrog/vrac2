@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 use std::{
     io,
     pin::Pin,
@@ -83,7 +84,7 @@ async fn main() -> BoxResult<()> {
     let input = Cursor::new(raw.as_bytes());
     let (wrt, rdr) = tokio::io::duplex(3);
     let wrt = wrt.compat();
-    let mut pipe = TestPipe {
+    let pipe = TestPipe {
         writer: wrt,
         reader: input,
     };

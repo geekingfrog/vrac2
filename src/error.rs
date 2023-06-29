@@ -1,3 +1,4 @@
+use aws_sdk_s3 as s3;
 use axum::{
     extract::multipart::MultipartError,
     response::{Html, IntoResponse, Response},
@@ -49,11 +50,17 @@ pub enum AppError {
     #[error("Invalid json data for storage backend {source}")]
     InvalidStorageBackendJSON {
         #[from]
-        source: serde_json::Error
+        source: serde_json::Error,
     },
 
     #[error("not found")]
     NotFound { body: Html<String> },
+
+    #[error("Cannot read remote blob")]
+    S3ReadError(#[from] s3::error::SdkError<s3::operation::get_object::GetObjectError>),
+
+    #[error("Cannot delete remote blob")]
+    S3DeleteError(#[from] s3::error::SdkError<s3::operation::delete_object::DeleteObjectError>),
 }
 
 impl IntoResponse for AppError {

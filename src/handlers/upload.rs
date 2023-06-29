@@ -1,6 +1,6 @@
 use async_zip::error::ZipError;
 use async_zip::{Compression, ZipEntryBuilder};
-use futures::{AsyncWrite as FAsyncWrite, Future, FutureExt};
+use futures::{Future, FutureExt};
 use hyper::{header, HeaderMap};
 use std::io::ErrorKind;
 use std::pin::Pin;
@@ -29,8 +29,6 @@ use crate::error::{AppError, Result};
 use crate::handlers::flash_utils::ctx_from_flashes;
 use crate::state::AppState;
 use crate::upload::{InitFile, StorageBackend};
-
-type StdResult<T, E> = std::result::Result<T, E>;
 
 // wrapper because I later need a futures::AsyncWrite, but tokio's File implements
 // tokio::io::AsyncWrite so this bridges the two.
@@ -191,10 +189,7 @@ pub(crate) async fn post_upload_form(
             state.storage_fs.delete_blob(data).await?;
             state.db.delete_files([db_file.id]).await?;
         } else {
-            let mb_data = state
-                .storage_fs
-                .finalize_upload(writer.into_inner())
-                .await?;
+            let mb_data = state.storage_fs.finalize_upload(writer.into_inner()).await?;
             state
                 .db
                 .finalise_file_upload(
@@ -362,17 +357,18 @@ async fn get_files_zip(
                 "local_fs" => {
                     let data = serde_json::from_str(&file.backend_data)?;
                     let blob = state
-                        .storage_fs
+                        .garage
                         .read_blob(data)
                         .await
-                        .map_err(|e| e.into_io_error())?;
+                        .map_err(|e| e.into_io_error())?
+                        .compat();
                     let filename = file.name.unwrap_or_else(|| format!("{}", file.id));
                     let opts = ZipEntryBuilder::new(filename.into(), Compression::Deflate);
                     let mut entry = zip_wrt
                         .write_entry_stream(opts)
                         .await
                         .map_err(|e| e.into_io_error())?;
-                    futures::io::copy(blob.compat(), &mut entry).await?;
+                    futures::io::copy(blob, &mut entry).await?;
                     entry.close().await.map_err(|e| e.into_io_error())?;
                 }
                 x => {

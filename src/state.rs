@@ -5,7 +5,7 @@ use tera::Tera;
 
 use crate::{
     db::DBService,
-    upload::LocalFsUploader,
+    upload::{GarageUploader, LocalFsUploader},
 };
 
 #[derive(Debug, Clone)]
@@ -14,6 +14,7 @@ pub struct AppState {
     pub db: DBService,
     pub(crate) flash_config: axum_flash::Config,
     pub storage_fs: LocalFsUploader,
+    pub garage: GarageUploader,
 }
 
 impl AppState {
@@ -25,11 +26,14 @@ impl AppState {
         let tera = Arc::new(RwLock::new(Tera::new(template_path)?));
         let db = DBService::new(db_path).await?;
         let flash_config = axum_flash::Config::new(axum_flash::Key::generate());
+        let garage = GarageUploader::new().await?;
+
         Ok(Self {
             templates: tera,
             db,
             flash_config,
             storage_fs: LocalFsUploader::new(storage_path),
+            garage,
         })
     }
 }
