@@ -141,6 +141,18 @@ pub(crate) async fn post_upload_form(
             return Ok(not_found.into_response());
         }
     };
+
+    let backend: Box<dyn StorageBackend + Send + Sync> =
+        if token.backend_type == state.storage_fs.get_type() {
+            Box::new(state.storage_fs.clone())
+        } else if token.backend_type == state.garage.get_type() {
+            Box::new(state.garage.clone())
+        } else {
+            return Err(crate::error::AppError::UnknownStorageBackend(
+                token.backend_type,
+            ));
+        };
+
     let token = state.db.initiate_upload(token).await?;
 
     let mut total_bytes = 0;
@@ -165,14 +177,14 @@ pub(crate) async fn post_upload_form(
             file_name: field.file_name(),
         };
 
-        let (writer, data) = state.storage_fs.initiate_upload(&init_file).await?;
+        let (writer, data) = backend.initiate_upload(&init_file).await?;
         let mut writer = writer.compat_write();
         let db_file = state
             .db
             .create_file(
                 &token,
-                state.storage_fs.get_type(),
-                serde_json::to_string(&data)?,
+                backend.get_type(),
+                data.clone(),
                 mime_type,
                 field.file_name(),
             )
@@ -186,20 +198,11 @@ pub(crate) async fn post_upload_form(
 
         if bytes_copied == 0 {
             tracing::info!("No bytes uploaded for token {} - {}", token.id, token.path);
-            state.storage_fs.delete_blob(data).await?;
+            backend.delete_blob(data).await?;
             state.db.delete_files([db_file.id]).await?;
         } else {
-            let mb_data = state
-                .storage_fs
-                .finalize_upload(writer.into_inner())
-                .await?;
-            state
-                .db
-                .finalise_file_upload(
-                    db_file,
-                    mb_data.map(|d| serde_json::to_string(&d)).transpose()?,
-                )
-                .await?;
+            let mb_data = writer.into_inner().finalize_upload().await?;
+            state.db.finalise_file_upload(db_file, mb_data).await?;
 
             tracing::info!("total uploaded for field: {}Kib", bytes_copied / 1024);
         }

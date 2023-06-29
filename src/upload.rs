@@ -7,9 +7,9 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::future::{BoxFuture, FutureExt};
+use futures::{future::FutureExt, Future};
 use pin_project::pin_project;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
@@ -33,53 +33,38 @@ pub struct InitFile<'token, 'file> {
     pub file_name: Option<&'file str>,
 }
 
+#[async_trait]
+pub trait Finalize {
+    /// Must be called right after all the bytes have been uploaded, to let
+    /// the backend perform any cleanup operation required.
+    /// can also optionally return some data to be persisted
+    async fn finalize_upload(self: Box<Self>) -> Result<Option<String>, AppError>;
+}
+
+pub trait WriteBlob: AsyncWrite + Unpin + Send + Finalize {}
+pub trait ReadBlob: AsyncRead + Unpin + Send {}
+
 /// A trait to persist an upload somewhere. That could be on the local
 /// file system, in a db as raw bytes, in S3 or whatever.
 #[async_trait]
-pub trait StorageBackend
-where
-    Self::WriteBlob: Send + AsyncWrite,
-    Self::ReadBlob: Send + AsyncRead,
-    Self::Data: Serialize + DeserializeOwned,
-{
-    /// An internal type that can be used to carry information
-    /// between starting and finalizing the upload. For example,
-    /// marking the transfer as completed in a metadata service, or
-    /// finalizing a multipart upload to S3
-    /// The AsyncWrite method will be used to store the actual data
-    type WriteBlob;
-
-    /// An internal type to be used to read data from the backend
-    /// The AsyncRead should be used to return what was stored
-    type ReadBlob;
-
-    /// Some datatype to be persisted to the DB
-    /// This should be used to store anything that's required to retrieve the
-    /// stored blob later on.
-    type Data;
-
+pub trait StorageBackend {
     /// identifier to know which implementation to use when
     /// one wants to manipulate a file.
     fn get_type(&self) -> &'static str;
 
     /// To be called just before starting to upload a file to the backend.
-    /// Self::Blob will use its AsyncWrite operation to persist the data
-    /// Self::Data will be stored in a database and can be used as an handle
-    /// to manipulate the Self::Blob object.
+    /// WriteBlob will use its AsyncWrite operation to persist the data
+    /// and the Finalize trait is used to complete the upload
+    /// the returned String will be stored in a database and can be used as an handle
+    /// to manipulate the blob object.
     async fn initiate_upload(
         &self,
         init_file: &InitFile,
-    ) -> Result<(Self::WriteBlob, Self::Data), AppError>;
+    ) -> Result<(Box<dyn WriteBlob>, String), AppError>;
 
-    /// Must be called right after all the bytes have been uploaded, to let
-    /// the backend perform any cleanup operation required.
-    /// can also optionally return some data to be persisted
-    async fn finalize_upload(&self, _blob: Self::WriteBlob)
-        -> Result<Option<Self::Data>, AppError>;
+    async fn delete_blob(&self, blob_raw_data: String) -> Result<(), AppError>;
 
-    async fn delete_blob(&self, blob_data: Self::Data) -> Result<(), AppError>;
-
-    async fn read_blob(&self, blob_data: Self::Data) -> Result<Self::ReadBlob, AppError>;
+    async fn read_blob(&self, blob_raw_data: String) -> Result<Box<dyn ReadBlob>, AppError>;
 }
 
 pub trait BackendErrorContext<T, E> {
@@ -130,6 +115,9 @@ pub struct LocalFsBlob {
     path: PathBuf,
 }
 
+impl ReadBlob for LocalFsBlob {}
+impl WriteBlob for LocalFsBlob {}
+
 impl AsyncWrite for LocalFsBlob {
     fn poll_write(
         self: Pin<&mut Self>,
@@ -158,6 +146,17 @@ impl AsyncRead for LocalFsBlob {
     }
 }
 
+#[async_trait]
+impl Finalize for LocalFsBlob {
+    async fn finalize_upload(self: Box<Self>) -> Result<Option<String>, AppError> {
+        self.inner
+            .sync_all()
+            .await
+            .with_context(|| format!("Cannot sync all to {:?}", &self.path))?;
+        Ok(None)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LocalFsData {
     path: PathBuf,
@@ -166,10 +165,6 @@ pub struct LocalFsData {
 
 #[async_trait]
 impl StorageBackend for LocalFsUploader {
-    type WriteBlob = LocalFsBlob;
-    type ReadBlob = LocalFsBlob;
-    type Data = LocalFsData;
-
     fn get_type(&self) -> &'static str {
         "local_fs"
     }
@@ -177,7 +172,7 @@ impl StorageBackend for LocalFsUploader {
     async fn initiate_upload(
         &self,
         init_file: &InitFile,
-    ) -> Result<(LocalFsBlob, LocalFsData), AppError> {
+    ) -> Result<(Box<dyn WriteBlob>, String), AppError> {
         let mut path = self.base_path.clone();
         path.push(format!(
             "{}_{:02}_{:03}",
@@ -191,26 +186,19 @@ impl StorageBackend for LocalFsUploader {
             .await
             .with_context(|| format!("Cannot save file to {:?}", &path))?;
         Ok((
-            LocalFsBlob {
+            Box::new(LocalFsBlob {
                 inner: file,
                 path: path.clone(),
-            },
-            LocalFsData {
+            }),
+            serde_json::to_string(&LocalFsData {
                 path,
                 version: self.version,
-            },
+            })?,
         ))
     }
 
-    async fn finalize_upload(&self, blob: Self::WriteBlob) -> Result<Option<Self::Data>, AppError> {
-        blob.inner
-            .sync_all()
-            .await
-            .with_context(|| format!("Cannot sync all to {:?}", &blob.path))?;
-        Ok(None)
-    }
-
-    async fn delete_blob(&self, blob_data: Self::Data) -> Result<(), AppError> {
+    async fn delete_blob(&self, blob_raw_data: String) -> Result<(), AppError> {
+        let blob_data: LocalFsData = serde_json::from_str(&blob_raw_data)?;
         match fs::remove_file(&blob_data.path).await {
             Ok(_) => Ok(()),
             Err(err) => {
@@ -225,14 +213,15 @@ impl StorageBackend for LocalFsUploader {
         }
     }
 
-    async fn read_blob(&self, blob_data: Self::Data) -> Result<Self::ReadBlob, AppError> {
+    async fn read_blob(&self, blob_raw_data: String) -> Result<Box<dyn ReadBlob>, AppError> {
+        let blob_data: LocalFsData = serde_json::from_str(&blob_raw_data)?;
         let file = fs::File::open(&blob_data.path)
             .await
             .with_context(|| format!("Cannot open file at {:?}", blob_data.path))?;
-        Ok(LocalFsBlob {
+        Ok(Box::new(LocalFsBlob {
             inner: file,
             path: blob_data.path,
-        })
+        }))
     }
 }
 
@@ -259,9 +248,9 @@ impl GarageUploader {
 
 #[async_trait]
 impl StorageBackend for GarageUploader {
-    type WriteBlob = GarageWriteBlob;
-    type ReadBlob = GarageReadBlob;
-    type Data = GarageData;
+    // type WriteBlob = GarageWriteBlob;
+    // type ReadBlob = GarageReadBlob;
+    // type Data = GarageData;
 
     fn get_type(&self) -> &'static str {
         "garage"
@@ -270,15 +259,12 @@ impl StorageBackend for GarageUploader {
     async fn initiate_upload(
         &self,
         init_file: &InitFile,
-    ) -> Result<(Self::WriteBlob, Self::Data), AppError> {
+    ) -> Result<(Box<dyn WriteBlob>, String), AppError> {
         let (send_chan, channel_body) = hyper::body::Body::channel();
-        let key = match init_file.file_name {
-            Some(name) => name.to_string(),
-            None => format!(
-                "{}_{:02}_{:03}",
-                init_file.token_id, init_file.attempt_counter, init_file.file_index
-            ),
-        };
+        let key = format!(
+            "{}_{:02}_{:03}",
+            init_file.token_id, init_file.attempt_counter, init_file.file_index
+        );
 
         let stream = ByteStream::new(SdkBody::from(channel_body));
         let request = self
@@ -289,11 +275,6 @@ impl StorageBackend for GarageUploader {
             .body(stream)
             .set_content_type(init_file.mime_type.map(str::to_string));
 
-        let data = GarageData {
-            bucket: self.bucket.clone(),
-            key,
-        };
-
         let send_future = request.send().map(|res| match res {
             Ok(_) => Ok(()),
             Err(err) => {
@@ -302,26 +283,24 @@ impl StorageBackend for GarageUploader {
             }
         });
 
+        let data = GarageData {
+            bucket: self.bucket.clone(),
+            key,
+        };
+
         let blob = GarageWriteBlob {
             send_chan: Some(send_chan),
-            wait_upstream_done: false,
             send_future: Box::pin(send_future),
         };
 
-        Ok((blob, data))
+        Ok((Box::new(blob), serde_json::to_string(&data)?))
     }
 
-    async fn finalize_upload(
-        &self,
-        mut blob: Self::WriteBlob,
-    ) -> Result<Option<Self::Data>, AppError> {
-        blob.flush().await?;
-        blob.shutdown().await?;
-        Ok(None)
-    }
+    async fn delete_blob(&self, blob_raw_data: String) -> Result<(), AppError> {
+        let blob_data: GarageData = serde_json::from_str(&blob_raw_data)?;
 
-    async fn delete_blob(&self, blob_data: Self::Data) -> Result<(), AppError> {
-        self.client.delete_object()
+        self.client
+            .delete_object()
             .bucket(blob_data.bucket)
             .key(blob_data.key)
             .send()
@@ -329,7 +308,8 @@ impl StorageBackend for GarageUploader {
         Ok(())
     }
 
-    async fn read_blob(&self, blob_data: Self::Data) -> Result<Self::ReadBlob, AppError> {
+    async fn read_blob(&self, blob_raw_data: String) -> Result<Box<dyn ReadBlob>, AppError> {
+        let blob_data: GarageData = serde_json::from_str(&blob_raw_data)?;
         let response = self
             .client
             .get_object()
@@ -338,9 +318,11 @@ impl StorageBackend for GarageUploader {
             .send()
             .await?;
 
-        Ok(GarageReadBlob {
+        let blob = GarageReadBlob {
             body: Box::new(BufReader::new(response.body.into_async_read())),
-        })
+        };
+
+        Ok(Box::new(blob) as _)
     }
 }
 
@@ -354,11 +336,14 @@ pub struct GarageData {
 pub struct GarageWriteBlob {
     #[pin]
     send_chan: Option<hyper::body::Sender>,
-    wait_upstream_done: bool,
-    // #[pin]
-    // send_chan_future: Option<BoxFuture<'static, std::io::Result<()>>>,
-    send_future: BoxFuture<'static, std::io::Result<()>>,
+    /// the future holding the s3 request.send()
+    send_future: Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + 'static>>,
 }
+
+// trait Foo: Send + Sync {}
+// impl Foo for GarageWriteBlob {}
+
+impl WriteBlob for GarageWriteBlob {}
 
 impl AsyncWrite for GarageWriteBlob {
     fn poll_write(
@@ -392,11 +377,8 @@ impl AsyncWrite for GarageWriteBlob {
         if let Some(mut chan) = this.send_chan.as_pin_mut() {
             let mut chunk = Bytes::copy_from_slice(buf);
             loop {
-                futures::ready!(chan.poll_ready(cx)).map_err(|err| {
-                    tracing::error!("{err:?}");
-                    let err: std::io::Error = ErrorKind::Other.into();
-                    err
-                })?;
+                futures::ready!(chan.poll_ready(cx))
+                    .map_err(|err| std::io::Error::new(ErrorKind::Other, err))?;
 
                 let len = chunk.len();
                 tracing::trace!("Sending {} bytes to the streaming body", len);
@@ -432,11 +414,22 @@ impl AsyncWrite for GarageWriteBlob {
     }
 }
 
+#[async_trait]
+impl Finalize for GarageWriteBlob {
+    async fn finalize_upload(mut self: Box<Self>) -> Result<Option<String>, AppError> {
+        self.flush().await?;
+        self.shutdown().await?;
+        Ok(None)
+    }
+}
+
 #[pin_project]
 pub struct GarageReadBlob {
     #[pin]
-    body: Box<dyn AsyncRead + Unpin + Send>,
+    body: Box<dyn AsyncRead + Unpin + Send + Sync>,
 }
+
+impl ReadBlob for GarageReadBlob {}
 
 impl AsyncRead for GarageReadBlob {
     fn poll_read(

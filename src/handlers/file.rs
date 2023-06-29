@@ -9,7 +9,7 @@ use tokio_util::io::ReaderStream;
 use crate::{
     error::{AppError, Result},
     state::AppState,
-    upload::{LocalFsData, StorageBackend, GarageData},
+    upload::StorageBackend,
 };
 
 #[derive(serde::Deserialize, Debug)]
@@ -56,15 +56,14 @@ pub(crate) async fn get_file(
             .unwrap(),
     );
 
+    tracing::debug!("{} reading backend data {}", file.backend_type, file.backend_data);
     let blob: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match file.backend_type.as_str() {
         "local_fs" => {
-            let backend_data: LocalFsData = serde_json::from_str(&file.backend_data)?;
-            let blob = state.storage_fs.read_blob(backend_data).await?;
+            let blob = state.storage_fs.read_blob(file.backend_data).await?;
             Box::new(blob)
         }
         "garage" => {
-            let backend_data: GarageData = serde_json::from_str(&file.backend_data)?;
-            let blob = state.garage.read_blob(backend_data).await?;
+            let blob = state.garage.read_blob(file.backend_data).await?;
             Box::new(blob)
         }
         wut => {

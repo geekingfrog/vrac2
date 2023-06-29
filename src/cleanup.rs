@@ -6,10 +6,14 @@ use time::OffsetDateTime;
 use crate::{
     db::{DBService, DbFile},
     error::Result,
-    upload::{LocalFsUploader, StorageBackend},
+    upload::{GarageUploader, LocalFsUploader, StorageBackend},
 };
 
-pub async fn cleanup(db: &DBService, storage: &LocalFsUploader) -> Result<()> {
+pub async fn cleanup(
+    db: &DBService,
+    storage: &LocalFsUploader,
+    garage: &GarageUploader,
+) -> Result<()> {
     let now = OffsetDateTime::now_utc();
     let files = db.get_files_to_delete(&now).await?;
 
@@ -20,7 +24,7 @@ pub async fn cleanup(db: &DBService, storage: &LocalFsUploader) -> Result<()> {
     future::try_join_all(
         files
             .iter()
-            .map(|f| async move { delete_file(storage, f).await }),
+            .map(|f| async move { delete_file(storage, garage, f).await }),
     )
     .await?;
 
@@ -41,17 +45,22 @@ pub async fn cleanup(db: &DBService, storage: &LocalFsUploader) -> Result<()> {
     Ok(())
 }
 
-async fn delete_file(storage: &LocalFsUploader, file: &DbFile) -> Result<()> {
+async fn delete_file(
+    storage: &LocalFsUploader,
+    garage: &GarageUploader,
+    file: &DbFile,
+) -> Result<()> {
     tracing::info!("Attempting to delete file {}", file.id);
     match file.backend_type.as_str() {
         "local_fs" => {
-            let data = serde_json::from_str(&file.backend_data)?;
-            storage.delete_blob(data).await?;
+            storage.delete_blob(file.backend_data.clone()).await?;
             tracing::info!("Successfully deleted file with id {}", file.id);
             Ok(())
         }
         "garage" => {
-            todo!("can't delete file in garage yet");
+            garage.delete_blob(file.backend_data.clone()).await?;
+            tracing::info!("Successfully deleted file with id {}", file.id);
+            Ok(())
         }
         bt => {
             tracing::error!("Unknown backend type {bt} for file {}", file.id);

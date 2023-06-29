@@ -101,7 +101,7 @@ async fn serve(
 
     tokio::try_join!(
         webserver(addr, app),
-        background_cleanup(&state.db, &state.storage_fs)
+        background_cleanup(&state.db, &state.storage_fs, &state.garage)
     )?;
 
     Ok(())
@@ -118,9 +118,10 @@ async fn webserver(addr: SocketAddr, app: Router) -> BoxResult<()> {
 async fn background_cleanup(
     db: &vrac::db::DBService,
     storage_fs: &vrac::upload::LocalFsUploader,
+    garage: &vrac::upload::GarageUploader,
 ) -> Result<(), axum::BoxError> {
     loop {
-        vrac::cleanup::cleanup(&db, &storage_fs).await?;
+        vrac::cleanup::cleanup(&db, &storage_fs, &garage).await?;
         tokio::time::sleep(std::time::Duration::from_secs(60 * 5)).await;
     }
 }

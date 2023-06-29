@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use vrac::handlers::gen::{GenTokenForm, StorageBackendType};
 
 type BoxResult<T> = Result<T, Box<dyn std::error::Error>>;
