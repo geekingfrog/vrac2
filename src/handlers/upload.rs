@@ -189,7 +189,10 @@ pub(crate) async fn post_upload_form(
             state.storage_fs.delete_blob(data).await?;
             state.db.delete_files([db_file.id]).await?;
         } else {
-            let mb_data = state.storage_fs.finalize_upload(writer.into_inner()).await?;
+            let mb_data = state
+                .storage_fs
+                .finalize_upload(writer.into_inner())
+                .await?;
             state
                 .db
                 .finalise_file_upload(

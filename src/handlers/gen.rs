@@ -12,6 +12,7 @@ use crate::auth::Admin;
 use crate::error::Result;
 use crate::handlers::flash_utils::NotifLevel;
 use crate::state::AppState;
+use crate::upload::StorageBackend;
 
 use super::flash_utils::Notif;
 
@@ -38,6 +39,17 @@ pub struct GenTokenForm {
     pub content_expires_after_hours: Option<i64>,
     #[serde(rename = "token-valid-for-hour")]
     pub token_valid_for_hour: u64,
+
+    #[serde(rename = "storage-backend")]
+    pub storage_backend: StorageBackendType,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub enum StorageBackendType {
+    #[serde(rename = "local_fs")]
+    LocalFS,
+    #[serde(rename = "garage")]
+    Garage,
 }
 
 #[tracing::instrument(skip(flashes, state), level = "debug")]
@@ -88,14 +100,22 @@ pub(crate) async fn create_token(
             return Ok((flash, (StatusCode::BAD_REQUEST, page).into_response()));
         }
     };
+    tracing::debug!("got GenFormToken: {:?}", form);
 
     let valid_until =
         OffsetDateTime::now_utc() + Duration::from_secs(form.token_valid_for_hour * 3600);
+
+    let backend_type = match form.storage_backend {
+        StorageBackendType::LocalFS => state.storage_fs.get_type(),
+        StorageBackendType::Garage => state.garage.get_type(),
+    };
+
     let ct = crate::db::CreateToken {
         path: &form.path,
         max_size_mib: form.max_size_mib,
         valid_until,
         content_expires_after_hours: form.content_expires_after_hours,
+        backend_type,
     };
 
     let r = state.db.create_token(ct).await?;

@@ -51,10 +51,7 @@ async fn delete_file(storage: &LocalFsUploader, file: &DbFile) -> Result<()> {
             Ok(())
         }
         "garage" => {
-            let data = serde_json::from_str(&file.backend_data)?;
-            storage.delete_blob(data).await?;
-            tracing::info!("Successfully deleted file with id {}", file.id);
-            Ok(())
+            todo!("can't delete file in garage yet");
         }
         bt => {
             tracing::error!("Unknown backend type {bt} for file {}", file.id);

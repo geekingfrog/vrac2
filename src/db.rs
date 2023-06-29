@@ -43,6 +43,9 @@ pub(crate) struct DbToken {
     /// this token and the associated files are considered expired (and will be deleted
     /// asynchronously) after this date
     pub(crate) content_expires_at: Option<OffsetDateTime>,
+
+    /// an identifier for the type of storage to use for this token.
+    pub(crate) backend_type: String,
 }
 
 #[derive(Debug)]
@@ -51,6 +54,7 @@ pub(crate) struct CreateToken<'input> {
     pub(crate) max_size_mib: Option<i64>,
     pub(crate) valid_until: OffsetDateTime,
     pub(crate) content_expires_after_hours: Option<i64>,
+    pub(crate) backend_type: &'input str,
 }
 
 #[derive(sqlx::FromRow, Debug)]
@@ -196,14 +200,15 @@ impl DBService {
 
         let tok = sqlx::query_as::<_, DbToken>(
             "INSERT INTO token
-            (path, max_size_mib, valid_until, content_expires_after_hours)
-            VALUES (?,?,?,?)
+            (path, max_size_mib, valid_until, content_expires_after_hours, backend_type)
+            VALUES (?,?,?,?,?)
             RETURNING *",
         )
         .bind(ct.path)
         .bind(ct.max_size_mib)
         .bind(ct.valid_until)
         .bind(ct.content_expires_after_hours)
+        .bind(ct.backend_type)
         .fetch_one(&mut tx)
         .await
         .with_context(|| format!("cannot create token for path {}", ct.path))?;

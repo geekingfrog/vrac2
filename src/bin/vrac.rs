@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use hyper::{Body, Request};
 use hyper_tls::HttpsConnector;
 use mpart_async::client::MultipartRequest;
-use vrac::handlers::gen::GenTokenForm;
+use vrac::handlers::gen::{GenTokenForm, StorageBackendType};
 use vrac::{app::build, state::AppState};
 
 type BoxResult<T> = Result<T, axum::BoxError>;
@@ -163,6 +163,7 @@ async fn upload(
         max_size_mib: None,
         content_expires_after_hours,
         token_valid_for_hour: 1,
+        storage_backend: StorageBackendType::LocalFS,
     };
 
     let request = Request::post(hyper::Uri::from_str(gen_url.as_str()).unwrap())
