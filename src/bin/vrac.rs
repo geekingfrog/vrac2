@@ -3,6 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use anyhow::{anyhow, Context};
 use axum::Router;
 use base64::Engine;
 use clap::{Parser, Subcommand};
@@ -11,8 +12,6 @@ use hyper_tls::HttpsConnector;
 use mpart_async::client::MultipartRequest;
 use vrac::handlers::gen::{GenTokenForm, StorageBackendType};
 use vrac::{app::build, state::AppState};
-
-type BoxResult<T> = Result<T, axum::BoxError>;
 
 #[derive(Parser, Debug)]
 #[command(version)]
@@ -54,7 +53,7 @@ enum Command {
 }
 
 #[tokio::main]
-async fn main() -> BoxResult<()> {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
@@ -81,7 +80,7 @@ async fn serve(
     storage_path: String,
     port: u16,
     bind_address: String,
-) -> BoxResult<()> {
+) -> anyhow::Result<()> {
     tracing::info!("Local fs for storage at {}", storage_path);
     tokio::fs::create_dir_all(&storage_path).await?;
 
@@ -92,7 +91,9 @@ async fn serve(
         .open(&sqlite_path)
         .await?;
 
-    let state = AppState::new("templates/**/*.html", &sqlite_path, &storage_path).await?;
+    let state = AppState::new("templates/**/*.html", &sqlite_path, &storage_path)
+        .await
+        .context("cannot construct app state")?;
     state.db.migrate().await?;
 
     let addr = IpAddr::from_str(&bind_address)?;
@@ -107,7 +108,7 @@ async fn serve(
     Ok(())
 }
 
-async fn webserver(addr: SocketAddr, app: Router) -> BoxResult<()> {
+async fn webserver(addr: SocketAddr, app: Router) -> anyhow::Result<()> {
     tracing::info!("Listening on {}", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
@@ -119,9 +120,11 @@ async fn background_cleanup(
     db: &vrac::db::DBService,
     storage_fs: &vrac::upload::LocalFsUploader,
     garage: &vrac::upload::GarageUploader,
-) -> Result<(), axum::BoxError> {
+) -> anyhow::Result<()> {
     loop {
-        vrac::cleanup::cleanup(&db, &storage_fs, &garage).await?;
+        vrac::cleanup::cleanup(&db, &storage_fs, &garage)
+            .await
+            .context("cleanup task failed")?;
         tokio::time::sleep(std::time::Duration::from_secs(60 * 5)).await;
     }
 }
@@ -132,8 +135,9 @@ async fn upload(
     name: Option<String>,
     expires_hours: i64,
     no_expires: bool,
-) -> BoxResult<()> {
-    let base_url = url::Url::parse(&base_url)?;
+) -> anyhow::Result<()> {
+    let base_url = url::Url::parse(&base_url)
+        .with_context(|| format!("Invalid base url to bind server {base_url}"))?;
 
     let https = HttpsConnector::new();
     let client = hyper::Client::builder().build::<_, hyper::Body>(https);
@@ -141,17 +145,15 @@ async fn upload(
     let mut gen_url = base_url.clone();
     gen_url.set_path("/gen");
 
-    let username =
-        env::var("VRAC_USERNAME").map_err(|e| format!("VRAC_USERNAME not found {e:?}"))?;
-    let password =
-        env::var("VRAC_PASSWORD").map_err(|e| format!("VRAC_PASSWORD not found {e:?}"))?;
+    let username = env::var("VRAC_USERNAME").with_context(|| format!("VRAC_USERNAME not found"))?;
+    let password = env::var("VRAC_PASSWORD").with_context(|| format!("VRAC_PASSWORD not found"))?;
 
     let raw_auth = format!("{}:{}", username, password);
     let encoded_auth = base64::engine::general_purpose::STANDARD_NO_PAD.encode(raw_auth.as_bytes());
 
     let filename = name
         .or_else(|| path.file_name().map(|s| s.to_string_lossy().into_owned()))
-        .ok_or_else(|| "Cannot get filename")?;
+        .ok_or(anyhow!("Cannot get filename"))?;
 
     let content_expires_after_hours = if no_expires {
         None
@@ -181,13 +183,13 @@ async fn upload(
     let response = client.request(request).await?;
     let status_code = response.status();
     if !status_code.is_redirection() {
-        return Err(format!("Couldn't create token, got status code: {}", status_code).into());
+        return Err(anyhow!("Couldn't create token, got status code: {}", status_code).into());
     }
 
     let location = response
         .headers()
         .get(hyper::header::LOCATION)
-        .ok_or("No location returned")?;
+        .ok_or(anyhow!("No location returned"))?;
 
     let mut upload_url = base_url.clone();
     upload_url.set_path(location.to_str()?);
@@ -208,7 +210,7 @@ async fn upload(
     if !status.is_redirection() {
         let body = hyper::body::to_bytes(response).await?;
         let strbody = String::from_utf8(body.to_vec())?;
-        return Err(format!("Couldn't upload files {}\n{}", status, strbody).into());
+        return Err(anyhow!("Couldn't upload files {}\n{}", status, strbody).into());
     }
 
     // output the final url as a result

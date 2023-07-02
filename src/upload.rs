@@ -248,10 +248,6 @@ impl GarageUploader {
 
 #[async_trait]
 impl StorageBackend for GarageUploader {
-    // type WriteBlob = GarageWriteBlob;
-    // type ReadBlob = GarageReadBlob;
-    // type Data = GarageData;
-
     fn get_type(&self) -> &'static str {
         "garage"
     }
@@ -297,6 +293,7 @@ impl StorageBackend for GarageUploader {
     }
 
     async fn delete_blob(&self, blob_raw_data: String) -> Result<(), AppError> {
+        tracing::trace!("deserializing for garagedata: {blob_raw_data}");
         let blob_data: GarageData = serde_json::from_str(&blob_raw_data)?;
 
         self.client

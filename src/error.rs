@@ -61,6 +61,14 @@ pub enum AppError {
 
     #[error("Cannot delete remote blob")]
     S3DeleteError(#[from] s3::error::SdkError<s3::operation::delete_object::DeleteObjectError>),
+
+    #[error("Delete blob failed for file id {file_id} and token id {token_id}")]
+    DeleteBlobError {
+        file_id: i64,
+        token_id: i64,
+        #[source]
+        source: Box<AppError>,
+    },
 }
 
 impl IntoResponse for AppError {

@@ -5,7 +5,7 @@ use time::OffsetDateTime;
 
 use crate::{
     db::{DBService, DbFile},
-    error::Result,
+    error::{AppError, Result},
     upload::{GarageUploader, LocalFsUploader, StorageBackend},
 };
 
@@ -50,21 +50,32 @@ async fn delete_file(
     garage: &GarageUploader,
     file: &DbFile,
 ) -> Result<()> {
-    tracing::info!("Attempting to delete file {}", file.id);
-    match file.backend_type.as_str() {
+    tracing::info!(
+        "Attempting to delete file {} (token {})",
+        file.id,
+        file.token_id
+    );
+    let res = match file.backend_type.as_str() {
         "local_fs" => {
-            storage.delete_blob(file.backend_data.clone()).await?;
-            tracing::info!("Successfully deleted file with id {}", file.id);
-            Ok(())
+            storage.delete_blob(file.backend_data.clone()).await
         }
         "garage" => {
-            garage.delete_blob(file.backend_data.clone()).await?;
-            tracing::info!("Successfully deleted file with id {}", file.id);
-            Ok(())
+            garage.delete_blob(file.backend_data.clone()).await
         }
         bt => {
             tracing::error!("Unknown backend type {bt} for file {}", file.id);
             Ok(())
         }
+    };
+    match res {
+        Ok(_) => {
+            tracing::info!("Successfully deleted file with id {}", file.id);
+            Ok(())
+        }
+        Err(err) => Err(AppError::DeleteBlobError {
+            file_id: file.id,
+            token_id: file.token_id,
+            source: Box::new(err),
+        }),
     }
 }

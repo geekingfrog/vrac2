@@ -108,6 +108,7 @@ pub(crate) enum GetTokenResult {
 
 impl DBService {
     pub async fn new(db_path: &str) -> Result<Self> {
+        tracing::info!("starting sqlite at {db_path}");
         let pool_res = SqlitePoolOptions::new()
             .max_connections(2)
             .after_connect(|conn, _meta| {
