@@ -263,6 +263,7 @@ async fn get_files_html(
             d.format(&fmt).expect("formatting offsetdatetime")
         }),
     );
+    ctx.insert("base_url", &state.base_url);
 
     ctx.insert(
         "expires_in",

@@ -1,9 +1,23 @@
 {# vim: set ft=jinja #}
 {% import "macros.html" as macros %}
 
+
 {% extends "base.html" %}
-{% block title %}{{ tok_path }} - files{% endblock title %}
-{% block head %} {{ super() }} {% endblock head %}
+
+{% block title %}Vrac: {{ tok_path }} - files{% endblock title %}
+{% block head %}
+{{ super() }}
+<meta content="summary_large_image" name="twitter:card" property="twitter:card">
+<meta content="Vrac - {{ tok_path }}" name="og:title" property="og:title">
+
+{% if files and files[0].mime_prefix == "image" %}
+<meta content="{{base_url}}/f/{{tok_path}}/{{files[0].id}}" name="og:image" property="og:image">
+{% endif %}
+
+<meta property="og:description" name="og:description" content="some random file(s) {{tok_path}}">
+
+<meta content="{{base_url}}/f/{{tok_path}}" name="og:url" property="og:url">
+{% endblock head %}
 
 {% block body %}
   {{ super() }}

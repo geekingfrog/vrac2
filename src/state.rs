@@ -12,6 +12,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub(crate) templates: Arc<RwLock<Tera>>,
+    pub base_url: String,
     pub db: DBService,
     pub(crate) flash_config: axum_flash::Config,
     pub storage_fs: LocalFsUploader,
@@ -23,6 +24,7 @@ impl AppState {
         template_path: &str,
         db_path: &str,
         storage_path: &str,
+        base_url: String,
     ) -> Result<Self> {
         let tera = Arc::new(RwLock::new(Tera::new(template_path)?));
         let db = DBService::new(db_path).await?;
@@ -31,6 +33,7 @@ impl AppState {
 
         Ok(Self {
             templates: tera,
+            base_url,
             db,
             flash_config,
             storage_fs: LocalFsUploader::new(storage_path),

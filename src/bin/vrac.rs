@@ -34,6 +34,10 @@ enum Command {
 
         #[arg(long, default_value = "127.0.0.1")]
         bind_address: String,
+
+        /// used to construct absolute urls
+        #[arg(long, default_value = "https://vrac.geekingfrog.com")]
+        base_url: String
     },
     Upload {
         path: PathBuf,
@@ -64,7 +68,8 @@ async fn main() -> anyhow::Result<()> {
             storage_path,
             port,
             bind_address,
-        } => serve(sqlite_path, storage_path, port, bind_address).await,
+            base_url,
+        } => serve(sqlite_path, storage_path, port, bind_address, base_url).await,
         Command::Upload {
             path,
             base_url,
@@ -80,6 +85,7 @@ async fn serve(
     storage_path: String,
     port: u16,
     bind_address: String,
+    base_url: String,
 ) -> anyhow::Result<()> {
     tracing::info!("Local fs for storage at {}", storage_path);
     tokio::fs::create_dir_all(&storage_path).await?;
@@ -91,7 +97,7 @@ async fn serve(
         .open(&sqlite_path)
         .await?;
 
-    let state = AppState::new("templates/**/*.html", &sqlite_path, &storage_path)
+    let state = AppState::new("templates/**/*.html", &sqlite_path, &storage_path, base_url)
         .await
         .context("cannot construct app state")?;
     state.db.migrate().await?;
