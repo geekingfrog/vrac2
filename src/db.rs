@@ -500,10 +500,14 @@ where
     let tokens = sqlx::query_as::<_, DbToken>(
         "SELECT * FROM token WHERE path=?
         AND deleted_at IS NULL
-        AND valid_until > ?
+        AND (
+            valid_until > ?
+            OR (content_expires_at is NULL OR content_expires_at > ?)
+        )
         LIMIT 1",
     )
     .bind(path)
+    .bind(now)
     .bind(now)
     // there can be several used token.
     .fetch_all(executor)
