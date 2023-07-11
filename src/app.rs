@@ -1,4 +1,4 @@
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, Path};
 use axum::http::StatusCode;
 use axum::{routing, Router};
 use tower::ServiceBuilder;
@@ -32,6 +32,12 @@ pub fn build(state: AppState) -> Router<()> {
                     "/f/:path",
                     routing::get(handlers::upload::get_upload_form)
                         .post(handlers::upload::post_upload_form),
+                )
+                .route(
+                    "/f/:path/",
+                    routing::get(|Path(p): Path<String>| async move {
+                        axum::response::Redirect::temporary(&format!("/f/{p}"))
+                    }),
                 )
                 .route("/f/:path/:file_id", routing::get(handlers::file::get_file))
                 .layer(DefaultBodyLimit::max(usize::MAX))
