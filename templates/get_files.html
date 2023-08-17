@@ -14,7 +14,7 @@
 <meta content="{{base_url}}/f/{{tok_path}}/{{files[0].id}}" name="og:image" property="og:image">
 {% endif %}
 
-<meta property="og:description" name="og:description" content="some random file(s) {{tok_path}}">
+<meta property="og:description" name="og:description" content="{% if files|length <= 1 %}a random file{% else %}some random files{% endif %} {{tok_path}}">
 
 <meta content="{{base_url}}/f/{{tok_path}}" name="og:url" property="og:url">
 {% endblock head %}
