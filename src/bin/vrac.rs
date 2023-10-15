@@ -175,6 +175,7 @@ async fn upload(
         storage_backend: StorageBackendType::LocalFS,
     };
 
+    tracing::debug!("gentokenform is: {:?}", serde_urlencoded::to_string(&form));
     let request = Request::post(hyper::Uri::from_str(gen_url.as_str()).unwrap())
         .header(
             hyper::header::CONTENT_TYPE,
@@ -189,6 +190,7 @@ async fn upload(
     let response = client.request(request).await?;
     let status_code = response.status();
     if !status_code.is_redirection() {
+        tracing::debug!("Error creating token: {response:?}");
         return Err(anyhow!("Couldn't create token, got status code: {}", status_code).into());
     }
 

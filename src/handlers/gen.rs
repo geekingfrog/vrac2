@@ -213,6 +213,6 @@ where
 {
     match field {
         Some(v) => s.serialize_some(&v.to_string()),
-        None => s.serialize_none(),
+        None => s.serialize_str("None")
     }
 }
