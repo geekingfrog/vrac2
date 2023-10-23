@@ -188,10 +188,10 @@ impl DBService {
             )
         })?;
 
-        let t = get_valid_token(&mut tx, ct.path).await?;
+        let t = get_valid_token(&mut *tx, ct.path).await?;
         tracing::debug!("valid token for path {} is: {:?}", ct.path, t);
 
-        match get_valid_token(&mut tx, ct.path).await? {
+        match get_valid_token(&mut *tx, ct.path).await? {
             GetTokenResult::Used(t) | GetTokenResult::Fresh(t) => {
                 tracing::info!("Token already exist for {} at id {}", t.path, t.id);
                 return Ok(Err(TokenError::AlreadyExist));
@@ -210,7 +210,7 @@ impl DBService {
         .bind(ct.valid_until)
         .bind(ct.content_expires_after_hours)
         .bind(ct.backend_type)
-        .fetch_one(&mut tx)
+        .fetch_one(&mut *tx)
         .await
         .with_context(|| format!("cannot create token for path {}", ct.path))?;
         tx.commit()
@@ -242,7 +242,7 @@ impl DBService {
         )
         .bind(token.id)
         .bind(now)
-        .fetch_optional(&mut tx)
+        .fetch_optional(&mut *tx)
         .await
         .with_context(|| format!("failed to find a valid token for id {}", token.id))?
         .ok_or_else(|| AppError::NoTokenFound {
@@ -254,7 +254,7 @@ impl DBService {
         sqlx::query("UPDATE token SET attempt_counter=? WHERE id=?")
             .bind(tok.attempt_counter)
             .bind(token.id)
-            .execute(&mut tx)
+            .execute(&mut *tx)
             .await
             .with_context(|| format!("cannot set attempt counter for token {}", token.id))?;
 
@@ -415,7 +415,7 @@ impl DBService {
         for id in ids {
             sqlx::query("DELETE from file where id = ?")
                 .bind(id)
-                .execute(&mut tx)
+                .execute(&mut *tx)
                 .await
                 .with_context(|| format!("Cannot delete db file with id {}", id))?;
         }
