@@ -11,6 +11,9 @@ struct Args {
 
     #[arg(long, default_value = "/tmp/vrac/")]
     storage_path: String,
+
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[tokio::main]
@@ -18,6 +21,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
+    tracing::debug!("running with args {args:?}");
     let state = AppState::new(
         "templates/**/*.html",
         &args.sqlite_path,
@@ -62,18 +66,21 @@ async fn main() -> anyhow::Result<()> {
         let size_b = tokio::io::copy(&mut blob, &mut sink).await?;
         let size_b: i64 = size_b.try_into()?;
         tracing::info!("file {file_id} got size: {size_b}");
-        sqlx::query("INSERT INTO file_metadata (file_id, size_b, mime_type) VALUES (?, ?, ?)")
-            .bind(file_id)
-            .bind(size_b)
-            .bind(mime_type)
-            .execute(&pool)
-            .await
-            .with_context(|| {
-                format!(
-                    "error writing metadata for file upload with file_id {}",
-                    file_id
-                )
-            })?;
+        if !args.dry_run {
+            sqlx::query("INSERT INTO file_metadata (file_id, size_b, mime_type) VALUES (?, ?, ?)")
+                .bind(file_id)
+                .bind(size_b)
+                .bind(mime_type)
+                .execute(&pool)
+                .await
+                .with_context(|| {
+                    format!(
+                        "error writing metadata for file upload with file_id {}",
+                        file_id
+                    )
+                })?;
+            tracing::info!("added metadata for file {file_id}");
+        }
     }
 
     Ok(())
