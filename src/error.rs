@@ -79,6 +79,10 @@ impl IntoResponse for AppError {
                 tracing::error!("Server error: {self:?}");
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")).into_response()
             }
+            AppError::DBError { .. } => {
+                tracing::error!("DB error: {self:?}");
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")).into_response()
+            }
             _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")).into_response(),
         };
         res.into_response()
