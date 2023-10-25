@@ -6,11 +6,7 @@ use axum::{
 };
 use tokio_util::io::ReaderStream;
 
-use crate::{
-    error::{AppError, Result},
-    state::AppState,
-    upload::StorageBackend,
-};
+use crate::{error::Result, state::AppState};
 
 #[derive(serde::Deserialize, Debug)]
 pub(crate) struct Params {
@@ -56,21 +52,14 @@ pub(crate) async fn get_file(
             .unwrap(),
     );
 
-    tracing::debug!("{} reading backend data {}", file.backend_type, file.backend_data);
-    let blob: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match file.backend_type.as_str() {
-        "local_fs" => {
-            let blob = state.storage_fs.read_blob(file.backend_data).await?;
-            Box::new(blob)
-        }
-        "garage" => {
-            let blob = state.garage.read_blob(file.backend_data).await?;
-            Box::new(blob)
-        }
-        wut => {
-            tracing::warn!("Unknown storage backend: {wut}");
-            return Err(AppError::UnknownStorageBackend(wut.to_string()));
-        }
-    };
+    tracing::debug!(
+        "{} reading backend data {}",
+        file.backend_type,
+        file.backend_data
+    );
+    let blob = state
+        .get_blob(file.backend_type.as_str(), file.backend_data)
+        .await?;
 
     // stream an AsyncRead as a response
     // https://github.com/tokio-rs/axum/discussions/608

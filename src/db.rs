@@ -58,7 +58,6 @@ pub(crate) struct CreateToken<'input> {
 }
 
 #[derive(sqlx::FromRow, Debug)]
-#[allow(dead_code)]
 pub struct DbFile {
     pub id: i64,
     pub token_id: i64,
@@ -69,6 +68,50 @@ pub struct DbFile {
     pub backend_data: String,
     pub created_at: OffsetDateTime,
     pub completed_at: Option<OffsetDateTime>,
+}
+
+#[derive(sqlx::FromRow, Debug)]
+pub struct DbFileMetadata {
+    pub size_b: Option<i64>,
+    pub mime_type: Option<String>,
+    // TODO: would be cool to have a sha256
+}
+
+// used to deserialize from join
+#[derive(sqlx::FromRow, Debug)]
+struct FileAndMetadata {
+    id: i64,
+    token_id: i64,
+    attempt_counter: i64,
+    mime_type: Option<String>,
+    name: Option<String>,
+    backend_type: String,
+    backend_data: String,
+    created_at: OffsetDateTime,
+    completed_at: Option<OffsetDateTime>,
+    size_b: Option<i64>,
+}
+
+impl std::convert::From<FileAndMetadata> for (DbFile, DbFileMetadata) {
+    fn from(x: FileAndMetadata) -> Self {
+        (
+            DbFile {
+                id: x.id,
+                token_id: x.token_id,
+                attempt_counter: x.attempt_counter,
+                mime_type: x.mime_type.clone(),
+                name: x.name,
+                backend_type: x.backend_type,
+                backend_data: x.backend_data,
+                created_at: x.created_at,
+                completed_at: x.completed_at,
+            },
+            DbFileMetadata {
+                size_b: x.size_b,
+                mime_type: x.mime_type,
+            },
+        )
+    }
 }
 
 #[derive(sqlx::FromRow, Debug)]
@@ -166,13 +209,17 @@ impl DBService {
         &self,
         token_id: i64,
         attempt_counter: i64,
-    ) -> Result<Vec<DbFile>> {
-        sqlx::query_as::<_, DbFile>("SELECT * from file where token_id = ? AND attempt_counter=?")
+    ) -> Result<Vec<(DbFile, DbFileMetadata)>> {
+        let tmp = sqlx::query_as::<_, FileAndMetadata>("SELECT f.*, m.* from file as f JOIN file_metadata as m ON f.id = m.file_id where f.token_id = ? AND f.attempt_counter=?")
             .bind(token_id)
             .bind(attempt_counter)
             .fetch_all(&self.pool)
             .await
-            .with_context(|| format!("cannot get files for token with id {token_id}"))
+            .with_context(|| format!("cannot get files for token with id {token_id}"))?;
+
+        let res = tmp.into_iter().map(|x| x.into()).collect();
+
+        Ok(res)
     }
 
     pub(crate) async fn create_token<'input>(
@@ -309,12 +356,20 @@ impl DBService {
         &self,
         file: DbFile,
         backend_data: Option<String>,
+        metadata: DbFileMetadata,
     ) -> Result<()> {
+        let mut tx = self.pool.begin().await.with_context(|| {
+            format!(
+                "cannot begin transaction finalize file upload with file_id {}",
+                file.id
+            )
+        })?;
+
         if let Some(data) = backend_data {
             sqlx::query("UPDATE file SET backend_data=? WHERE id=?")
                 .bind(data)
                 .bind(file.id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .with_context(|| {
                     format!("error seting final data for file upload for id {}", file.id)
@@ -324,9 +379,29 @@ impl DBService {
         sqlx::query("UPDATE file SET completed_at=? WHERE id=?")
             .bind(time::OffsetDateTime::now_utc())
             .bind(file.id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .with_context(|| format!("error finalising file upload for id {}", file.id))?;
+
+        sqlx::query("INSERT INTO file_metadata (file_id, size_b, mime_type) VALUES (?, ?, ?)")
+            .bind(file.id)
+            .bind(metadata.size_b)
+            .bind(metadata.mime_type)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| {
+                format!(
+                    "error writing metadata for file upload with file_id {}",
+                    file.id
+                )
+            })?;
+
+        tx.commit().await.with_context(|| {
+            format!(
+                "failed to commit transaction when finalizing file upload for file_id {}",
+                file.id
+            )
+        })?;
 
         Ok(())
     }

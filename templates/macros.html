@@ -15,6 +15,7 @@
 </p>
 <p>
   <a href="{{path}}" download>📥 Download {{file.name}}</a>{%- if file.mime_type %} ({{file.mime_type}}){% endif %}
+  {%- if file.size %} - {{file.size|humanize_size}}{% endif %}
 </p>
 
 {% endmacro inline_file %}

@@ -14,6 +14,7 @@ axum = { version = "0.6.6", features = ["form", "multipart", "original-uri"] }
 axum-auth = "0.4.0"
 axum-flash = "0.6.0"
 base64 = "0.21.0"
+byte-unit = { version = "4.0.19", default-features = false, features = ["alloc", "std"] }
 bytes = "1.4.0"
 clap = { version = "4.2.7", features = ["derive"] }
 futures = "0.3.25"
@@ -60,3 +61,7 @@ path = "src/bin/vrac.rs"
 [[bin]]
 name = "test"
 path = "src/bin/test.rs"
+
+[[bin]]
+name = "fill-metadata"
+path = "src/bin/fill_metadata.rs"

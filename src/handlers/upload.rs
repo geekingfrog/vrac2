@@ -24,7 +24,7 @@ use tokio_util::compat::{
 
 use pin_project::pin_project;
 
-use crate::db::{DbFile, DbToken, GetTokenResult};
+use crate::db::{DbFile, DbFileMetadata, DbToken, GetTokenResult};
 use crate::error::{AppError, Result};
 use crate::handlers::flash_utils::ctx_from_flashes;
 use crate::state::AppState;
@@ -63,10 +63,11 @@ struct TplFile {
     mime_type: Option<String>,
     mime_prefix: Option<String>,
     name: Option<String>,
+    size: Option<i64>,
 }
 
-impl std::convert::From<DbFile> for TplFile {
-    fn from(f: DbFile) -> Self {
+impl std::convert::From<(DbFile, DbFileMetadata)> for TplFile {
+    fn from((f, m): (DbFile, DbFileMetadata)) -> Self {
         Self {
             id: f.id,
             mime_type: f.mime_type.clone(),
@@ -75,6 +76,7 @@ impl std::convert::From<DbFile> for TplFile {
                 None => None,
             }),
             name: f.name,
+            size: m.size_b,
         }
     }
 }
@@ -190,6 +192,8 @@ pub(crate) async fn post_upload_form(
             )
             .await?;
 
+        let mime_type = mime_type.map(str::to_string);
+
         let reader =
             field.map_err(|err| std::io::Error::new(ErrorKind::Other, format!("oops {err:?}")));
         let bytes_copied =
@@ -202,7 +206,14 @@ pub(crate) async fn post_upload_form(
             state.db.delete_files([db_file.id]).await?;
         } else {
             let mb_data = writer.into_inner().finalize_upload().await?;
-            state.db.finalise_file_upload(db_file, mb_data).await?;
+            let metadata = DbFileMetadata {
+                size_b: Some(bytes_copied as _),
+                mime_type,
+            };
+            state
+                .db
+                .finalise_file_upload(db_file, mb_data, metadata)
+                .await?;
 
             tracing::info!("total uploaded for field: {}Kib", bytes_copied / 1024);
         }
@@ -293,7 +304,7 @@ async fn get_files_html(
     ctx.insert("token_path", &tok.path);
 
     let files = state.db.get_files(tok.id, tok.attempt_counter).await?;
-    let files: Vec<TplFile> = files.into_iter().map(|f| f.into()).collect();
+    let files: Vec<TplFile> = files.into_iter().map(|x| x.into()).collect();
 
     ctx.insert("files", &files);
     ctx.insert("tok_path", &tok.path);
@@ -359,7 +370,7 @@ async fn get_files_zip(
     let (rdr, wrt) = tokio::io::duplex(4096);
     let fut = async move {
         let mut zip_wrt = async_zip::base::write::ZipFileWriter::new(wrt.compat());
-        for file in files {
+        for (file, _metadata) in files {
             match file.backend_type.as_str() {
                 "local_fs" => {
                     let data = serde_json::from_str(&file.backend_data)?;
