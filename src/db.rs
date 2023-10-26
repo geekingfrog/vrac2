@@ -488,6 +488,12 @@ impl DBService {
         // something different, and at that point, this doc may be handy:
         // https://github.com/launchbadge/sqlx/blob/main/FAQ.md#how-can-i-do-a-select--where-foo-in--query
         for id in ids {
+            sqlx::query("DELETE from file_metadata where file_id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("Cannot delete file metadata for file id {id}"))?;
+
             sqlx::query("DELETE from file where id = ?")
                 .bind(id)
                 .execute(&mut *tx)
