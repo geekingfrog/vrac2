@@ -114,11 +114,21 @@ impl std::convert::From<FileAndMetadata> for (DbFile, DbFileMetadata) {
     }
 }
 
-#[derive(sqlx::FromRow, Debug)]
+#[derive(sqlx::FromRow, Clone)]
 pub struct Account {
     pub id: i64,
     pub username: String,
     pub phc: String,
+}
+
+impl std::fmt::Debug for Account {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Account")
+            .field("id", &self.id)
+            .field("username", &self.username)
+            .field("phc", &"[redacted]")
+            .finish()
+    }
 }
 
 /// Must be created before being able to upload files for a given token

@@ -1,8 +1,7 @@
 use clap::{Parser, Subcommand};
-use password_hash::rand_core::OsRng;
-use password_hash::SaltString;
 use rpassword;
 use scrypt::password_hash::PasswordHasher;
+use scrypt::phc::PasswordHash;
 use scrypt::Scrypt;
 use std::error::Error;
 use vrac::db::DBService;
@@ -59,8 +58,6 @@ async fn change_password(sqlite_path: &str, username: &str) -> BoxResult<()> {
 }
 
 fn hash(password: &str) -> BoxResult<String> {
-    let salt = SaltString::generate(&mut OsRng);
-    Ok(Scrypt
-        .hash_password(password.as_bytes(), &salt)?
-        .to_string())
+    let hash: PasswordHash = Scrypt::default().hash_password(password.as_bytes())?;
+    Ok(hash.to_string())
 }

@@ -1,26 +1,24 @@
 {# vim: set ft=jinja #}
 <!DOCTYPE html>
-
 <html lang="en">
-  <head>
-    {% block head %}
-    <title>{% block title %}{% endblock title %}</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    {% endblock head %}
-  </head>
-
-  <body>
-    {% block body %}
-
-    {% if notifications %}
-      {% for notif in notifications %}
-        {% if notif.level != "Debug" %}
-        <p class="notif {{notif.level}}">{{notif.message}}</p>
+    <head>
+        {% block head %}
+            <title>
+                {% block title %}
+                {% endblock title %}
+            </title>
+            <link rel="stylesheet" href="/static/styles.css">
+        {% endblock head %}
+    </head>
+    <body>
+        {% if (messages is defined) and (messages|length > 0) %}
+            <ul>
+                {% for msg in messages %}
+                    <li>[{{ msg.l }}] {{ msg.m }}</li>
+                {% endfor %}
+            </ul>
         {% endif %}
-      {% endfor %}
-    {% endif %}
-
-    {% endblock body %}
-  </body>
-
+        {% block body %}
+        {% endblock body %}
+    </body>
 </html>

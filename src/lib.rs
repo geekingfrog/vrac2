@@ -6,4 +6,4 @@ pub mod error;
 pub mod upload;
 pub mod cleanup;
 mod filters;
-// pub(crate) mod auth;
+pub(crate) mod auth;

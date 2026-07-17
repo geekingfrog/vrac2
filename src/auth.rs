@@ -1,98 +1,83 @@
-// use std::convert::Infallible;
-//
-// use async_trait::async_trait;
-// use axum::extract::{FromRequestParts, OptionalFromRequestParts};
-// use axum::http::request::Parts;
-// use axum::response::{IntoResponse, Response};
-// use axum_auth::AuthBasic;
-// use hyper::{HeaderMap, StatusCode};
-// use password_hash::PasswordHash;
-// use scrypt::password_hash::PasswordVerifier;
-// use scrypt::Scrypt;
-//
-// use crate::db::Account;
-// use crate::state::AppState;
-//
-// pub(crate) type Rejection = Response;
-// pub(crate) struct Admin(Account);
-//
-// // hugh, the name
-// #[async_trait]
-// trait AccountGrabber {
-//     async fn get_account(&self, username: &str) -> crate::error::Result<Option<Account>>;
-// }
-//
-// #[async_trait]
-// impl AccountGrabber for AppState {
-//     async fn get_account(&self, username: &str) -> crate::error::Result<Option<Account>> {
-//         self.db.get_account(username).await
-//     }
-// }
-//
-// impl Admin {
-//     async fn decode_request_parts<S>(parts: &mut Parts, state: &S) -> Result<Account, Rejection>
-//     where
-//         S: Send + Sync + AccountGrabber,
-//     {
-//         let auth_header: Result<_, Infallible> =
-//             Option::<AuthBasic>::from_request_parts(parts, state).await;
-//
-//         let (username, password) = match auth_header {
-//             Ok(Some(AuthBasic((username, password)))) => (username, password),
-//             Ok(None) => {
-//                 let mut headers = HeaderMap::new();
-//                 headers.insert(
-//                     axum::http::header::WWW_AUTHENTICATE,
-//                     r#"Basic realm="access-to-vrac""#.parse().unwrap(),
-//                 );
-//                 return Err((StatusCode::UNAUTHORIZED, headers).into_response());
-//             }
-//             Err(_) => unreachable!("Infallible"),
-//         };
-//
-//         let password = match password {
-//             Some(p) => p,
-//             None => return Err(StatusCode::UNAUTHORIZED.into_response()),
-//         };
-//
-//         let account = state.get_account(&username).await.map_err(|err| {
-//             tracing::error!("Error while getting account: {:?}", err);
-//             StatusCode::INTERNAL_SERVER_ERROR.into_response()
-//         })?;
-//
-//         let account = match account {
-//             Some(x) => x,
-//             None => return Err(StatusCode::UNAUTHORIZED.into_response()),
-//         };
-//
-//         let parsed_phc = PasswordHash::new(&account.phc).map_err(|err| {
-//             tracing::error!(
-//                 "Invalid phc in DB for user {} - {}: {:?}",
-//                 account.id,
-//                 account.username,
-//                 err
-//             );
-//             StatusCode::UNAUTHORIZED.into_response()
-//         })?;
-//         match Scrypt.verify_password(password.as_bytes(), &parsed_phc) {
-//             Ok(_) => {
-//                 tracing::info!("Authenticated user {}", account.username);
-//                 Ok(account)
-//             }
-//             Err(_) => Err(StatusCode::UNAUTHORIZED.into_response()),
-//         }
-//     }
-// }
-//
-// #[async_trait::async_trait]
-// impl<S> axum::extract::FromRequestParts<S> for Admin
-// where
-//     S: Send + Sync + AccountGrabber,
-// {
-//     type Rejection = Rejection;
-//
-//     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-//         let account = Admin::decode_request_parts(parts, state).await?;
-//         Ok(Admin(account))
-//     }
-// }
+use crate::{db, error::AppError};
+use axum_login::{AuthUser, AuthnBackend};
+use scrypt::{password_hash::PasswordVerifier, phc::PasswordHash, Scrypt};
+
+impl AuthUser for db::Account {
+    type Id = String;
+
+    fn id(&self) -> Self::Id {
+        self.username.to_string()
+    }
+
+    fn session_auth_hash(&self) -> &[u8] {
+        self.phc.as_bytes()
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct Credentials {
+    pub username: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("username", &self.username)
+            .field("password", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Backend {
+    db_service: db::DBService,
+}
+
+impl Backend {
+    pub fn new(db_service: db::DBService) -> Self {
+        Self { db_service }
+    }
+}
+
+impl AuthnBackend for Backend {
+    type User = db::Account;
+
+    type Credentials = Credentials;
+
+    type Error = crate::error::AppError;
+
+    async fn authenticate(
+        &self,
+        creds: Self::Credentials,
+    ) -> Result<Option<Self::User>, Self::Error> {
+        tracing::debug!("authenticating from creds: {:?}", creds);
+        let account = self.get_user(&creds.username).await;
+        tracing::debug!("account? {:?}", account);
+        let account = self
+            .get_user(&creds.username)
+            .await?
+            .ok_or(AppError::Unauthorized)?;
+        let parsed_phc =
+            PasswordHash::new(&account.phc).map_err(|err| AppError::InternalError {
+                message: format!(
+                    "invalid stored phc for user {}: {:?}",
+                    account.username, err
+                ),
+            })?;
+        match Scrypt::default().verify_password(creds.password.as_bytes(), &parsed_phc) {
+            Ok(()) => Ok(Some(account)),
+            Err(_err) => Err(AppError::Unauthorized),
+        }
+    }
+
+    async fn get_user(
+        &self,
+        user_id: &axum_login::UserId<Self>,
+    ) -> Result<Option<Self::User>, Self::Error> {
+        tracing::debug!("getting user with id: {user_id:?}");
+        self.db_service.get_account(user_id).await
+    }
+}
+
+pub type AuthSession = axum_login::AuthSession<Backend>;

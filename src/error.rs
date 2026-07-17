@@ -9,6 +9,9 @@ pub type Result<T> = std::result::Result<T, AppError>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum AppError {
+    #[error("Unauthorized")]
+    Unauthorized,
+
     #[error("Templating error")]
     TemplateError(#[from] tera::Error),
 
@@ -69,11 +72,15 @@ pub enum AppError {
         #[source]
         source: Box<AppError>,
     },
+
+    #[error("Internal error")]
+    InternalError { message: String },
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let res = match self {
+            AppError::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             AppError::NotFound { body } => (StatusCode::NOT_FOUND, body).into_response(),
             AppError::TemplateError(ref _err) => {
                 tracing::error!("Server error: {self:?}");
@@ -82,6 +89,9 @@ impl IntoResponse for AppError {
             AppError::DBError { .. } => {
                 tracing::error!("DB error: {self:?}");
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")).into_response()
+            }
+            AppError::InternalError { message } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
             }
             _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")).into_response(),
         };

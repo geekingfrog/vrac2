@@ -1,19 +1,25 @@
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::Form;
-use axum::{extract::State, response::Html, http::StatusCode};
+use axum::{extract::State, http::StatusCode, response::Html, routing};
+use axum::{Form, Router};
 use axum_flash::{Flash, IncomingFlashes};
 use serde::{Deserialize, Deserializer};
 use std::result::Result as StdResult;
 use std::time::Duration;
 use time::OffsetDateTime;
 
-// use crate::auth::Admin;
 use crate::error::Result;
 use crate::handlers::flash_utils::NotifLevel;
 use crate::state::AppState;
 use crate::upload::StorageBackend;
 
 use super::flash_utils::Notif;
+
+pub(crate) fn router(state: AppState) -> Router<()> {
+    Router::new()
+        .route("/gen", routing::get(get_token))
+        .route("/gen", routing::post(create_token))
+        .with_state(state)
+}
 
 // need the serialize_with bits to ensure we serialize into a string.
 // because a browser will send these fields as string, this ensure consistent
@@ -56,7 +62,6 @@ pub enum StorageBackendType {
 pub(crate) async fn get_token(
     flashes: IncomingFlashes,
     State(state): State<AppState>,
-    // _: Admin,
 ) -> Result<(IncomingFlashes, Html<String>)> {
     let mut ctx = tera::Context::new();
     let mut notifications = Vec::with_capacity(flashes.len());
@@ -83,7 +88,6 @@ pub(crate) async fn get_token(
 pub(crate) async fn create_token(
     State(state): State<AppState>,
     flash: Flash,
-    // _: Admin,
     form: StdResult<Form<GenTokenForm>, axum::extract::rejection::FormRejection>,
 ) -> Result<(Flash, Response)> {
     let form = match form {
