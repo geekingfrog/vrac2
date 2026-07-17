@@ -1,14 +1,13 @@
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Form;
-use axum::{extract::State, response::Html};
+use axum::{extract::State, response::Html, http::StatusCode};
 use axum_flash::{Flash, IncomingFlashes};
-use hyper::StatusCode;
 use serde::{Deserialize, Deserializer};
 use std::result::Result as StdResult;
 use std::time::Duration;
 use time::OffsetDateTime;
 
-use crate::auth::Admin;
+// use crate::auth::Admin;
 use crate::error::Result;
 use crate::handlers::flash_utils::NotifLevel;
 use crate::state::AppState;
@@ -53,10 +52,11 @@ pub enum StorageBackendType {
 }
 
 #[tracing::instrument(skip(flashes, state), level = "debug")]
+#[axum::debug_handler]
 pub(crate) async fn get_token(
     flashes: IncomingFlashes,
     State(state): State<AppState>,
-    _: Admin,
+    // _: Admin,
 ) -> Result<(IncomingFlashes, Html<String>)> {
     let mut ctx = tera::Context::new();
     let mut notifications = Vec::with_capacity(flashes.len());
@@ -83,7 +83,7 @@ pub(crate) async fn get_token(
 pub(crate) async fn create_token(
     State(state): State<AppState>,
     flash: Flash,
-    _: Admin,
+    // _: Admin,
     form: StdResult<Form<GenTokenForm>, axum::extract::rejection::FormRejection>,
 ) -> Result<(Flash, Response)> {
     let form = match form {
@@ -213,6 +213,6 @@ where
 {
     match field {
         Some(v) => s.serialize_some(&v.to_string()),
-        None => s.serialize_str("None")
+        None => s.serialize_str("None"),
     }
 }

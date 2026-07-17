@@ -1,7 +1,8 @@
 use async_zip::error::ZipError;
 use async_zip::{Compression, ZipEntryBuilder};
+use axum::http::{StatusCode, header, HeaderMap};
 use futures::{Future, FutureExt};
-use hyper::{header, HeaderMap};
+// use hyper::{header, HeaderMap};
 use std::io::ErrorKind;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -101,7 +102,7 @@ pub(crate) async fn get_upload_form(
                 .read()
                 .render("no_link_found.html", &tera::Context::new())?
                 .into();
-            let rsp = (hyper::StatusCode::NOT_FOUND, html);
+            let rsp = (StatusCode::NOT_FOUND, html);
             Ok((incoming_flashes, rsp).into_response())
         }
         GetTokenResult::Fresh(tok) => upload_form(state, incoming_flashes, tok).await,
@@ -408,7 +409,7 @@ async fn get_files_zip(
     };
 
     let stream = tokio_util::io::ReaderStream::new(zar.compat());
-    let body = axum::body::StreamBody::new(stream);
+    let body = axum::body::Body::from_stream(stream);
 
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());

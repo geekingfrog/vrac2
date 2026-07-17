@@ -1,9 +1,9 @@
 use aws_sdk_s3 as s3;
 use axum::{
     extract::multipart::MultipartError,
+    http::StatusCode,
     response::{Html, IntoResponse, Response},
 };
-use hyper::StatusCode;
 
 pub type Result<T> = std::result::Result<T, AppError>;
 

@@ -37,7 +37,7 @@ enum Command {
 
         /// used to construct absolute urls
         #[arg(long, default_value = "https://vrac.geekingfrog.com")]
-        base_url: String
+        base_url: String,
     },
     Upload {
         path: PathBuf,
@@ -116,9 +116,8 @@ async fn serve(
 
 async fn webserver(addr: SocketAddr, app: Router) -> anyhow::Result<()> {
     tracing::info!("Listening on {}", addr);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await?;
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app.into_make_service()).await?;
     Ok(())
 }
 

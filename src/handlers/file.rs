@@ -1,5 +1,5 @@
 use axum::{
-    body::StreamBody,
+    body::Body,
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -61,10 +61,8 @@ pub(crate) async fn get_file(
         .get_blob(file.backend_type.as_str(), file.backend_data)
         .await?;
 
-    // stream an AsyncRead as a response
-    // https://github.com/tokio-rs/axum/discussions/608
     let stream = ReaderStream::new(blob);
-    let body = StreamBody::new(stream);
+    let body = Body::from_stream(stream);
 
     Ok((headers, body).into_response())
 }
