@@ -3,11 +3,16 @@ use crate::{
     error::{AppError, Result},
     state::AppState,
 };
+use axum::{extract::Request, middleware::Next};
 use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect},
     routing, Form, Router,
+};
+use axum_extra::{
+    headers::{authorization::Basic, Authorization},
+    TypedHeader,
 };
 use axum_messages::Messages;
 
@@ -73,9 +78,7 @@ async fn login_post(
                 .render("login.html", &ctx)?
                 .into_response());
         }
-        Ok(Some(user)) => {
-            user
-        }
+        Ok(Some(user)) => user,
     };
 
     if let Err(err) = auth_session.login(&user).await {
@@ -97,5 +100,38 @@ async fn logout_get(mut auth_session: AuthSession) -> impl IntoResponse {
     match auth_session.logout().await {
         Ok(_) => Redirect::to("/login").into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+pub(crate) async fn basic_auth(
+    basic: Option<TypedHeader<Authorization<Basic>>>,
+    mut request: Request,
+    next: Next,
+) -> Result<impl IntoResponse> {
+    let auth_session = match (&mut request).extensions_mut().get_mut::<AuthSession>() {
+        None => return Ok(next.run(request).await),
+        Some(sess) => sess,
+    };
+
+    if let Some(TypedHeader(basic)) = basic {
+        let creds = Credentials {
+            username: basic.username().to_string(),
+            password: basic.password().to_string(),
+            next: None,
+        };
+        let user = match auth_session.authenticate(creds).await {
+            Ok(Some(user)) => user,
+            _ => return Err(AppError::Unauthorized),
+        };
+        if let Err(err) = auth_session.login(&user).await {
+            return Err(AppError::InternalError {
+                message: format!("{err:?}"),
+            });
+        }
+        tracing::debug!("logged in through basic auth: {}", &user.username);
+        let response = next.run(request).await;
+        Ok(response)
+    } else {
+        Ok(next.run(request).await)
     }
 }

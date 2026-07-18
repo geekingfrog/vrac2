@@ -29,6 +29,7 @@ pub fn build(state: AppState) -> Router<()> {
         .merge(handlers::auth::router(state.clone()))
         .merge(handlers::upload::router(state.clone()))
         .nest_service("/static", ServeDir::new("static"))
+        .layer(axum::middleware::from_fn(handlers::auth::basic_auth))
         .layer(axum_messages::MessagesManagerLayer)
         .layer(auth_layer)
 }

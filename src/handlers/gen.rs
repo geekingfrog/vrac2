@@ -71,7 +71,7 @@ async fn get_token(
         .into())
 }
 
-#[tracing::instrument(skip(state, form), level = "debug")]
+#[tracing::instrument(skip(state, form, messages), level = "debug")]
 async fn create_token(
     State(state): State<AppState>,
     messages: Messages,

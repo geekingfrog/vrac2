@@ -10,9 +10,9 @@ use clap::{Parser, Subcommand};
 use hyper::{Body, Request};
 use hyper_tls::HttpsConnector;
 use mpart_async::client::MultipartRequest;
+use vrac::app::build;
 use vrac::handlers::gen::{GenTokenForm, StorageBackendType};
 use vrac::state::State;
-use vrac::app::build;
 
 #[derive(Parser, Debug)]
 #[command(version)]
@@ -155,7 +155,7 @@ async fn upload(
     let password = env::var("VRAC_PASSWORD").with_context(|| format!("VRAC_PASSWORD not found"))?;
 
     let raw_auth = format!("{}:{}", username, password);
-    let encoded_auth = base64::engine::general_purpose::STANDARD_NO_PAD.encode(raw_auth.as_bytes());
+    let encoded_auth = base64::engine::general_purpose::STANDARD.encode(raw_auth.as_bytes());
 
     let filename = name
         .or_else(|| path.file_name().map(|s| s.to_string_lossy().into_owned()))
@@ -187,17 +187,24 @@ async fn upload(
         )
         .body(serde_urlencoded::to_string(&form)?.into())?;
 
+    tracing::debug!("request to gen: {request:?}");
+
     let response = client.request(request).await?;
+    tracing::debug!("response: {:?}", response);
     let status_code = response.status();
     if !status_code.is_redirection() {
         tracing::debug!("Error creating token: {response:?}");
         return Err(anyhow!("Couldn't create token, got status code: {}", status_code).into());
     }
 
+    tracing::info!("status code? {:?}", response.status());
+
     let location = response
         .headers()
         .get(hyper::header::LOCATION)
         .ok_or(anyhow!("No location returned"))?;
+
+    tracing::debug!("upload to: {location:?}");
 
     let mut upload_url = base_url.clone();
     upload_url.set_path(location.to_str()?);
