@@ -5,6 +5,9 @@
 
 {% block body %}
   {{ super() }}
+  {% if error is defined %}
+    <p class="notif error"> {{error}}</p>
+  {% endif %}
   <form class="gen-form" action="/gen" method="POST">
 
     <div>

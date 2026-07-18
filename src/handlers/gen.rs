@@ -1,18 +1,15 @@
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{extract::State, http::StatusCode, response::Html, routing};
 use axum::{Form, Router};
-use axum_flash::{Flash, IncomingFlashes};
+use axum_messages::{Message, Messages};
 use serde::{Deserialize, Deserializer};
 use std::result::Result as StdResult;
 use std::time::Duration;
 use time::OffsetDateTime;
 
 use crate::error::Result;
-use crate::handlers::flash_utils::NotifLevel;
 use crate::state::AppState;
 use crate::upload::StorageBackend;
-
-use super::flash_utils::Notif;
 
 pub(crate) fn router(state: AppState) -> Router<()> {
     Router::new()
@@ -57,51 +54,41 @@ pub enum StorageBackendType {
     Garage,
 }
 
-#[tracing::instrument(skip(flashes, state), level = "debug")]
+#[tracing::instrument(skip(state), level = "debug")]
 #[axum::debug_handler]
-pub(crate) async fn get_token(
-    flashes: IncomingFlashes,
+async fn get_token(
+    messages: Messages,
     State(state): State<AppState>,
-) -> Result<(IncomingFlashes, Html<String>)> {
+) -> Result<Html<String>> {
     let mut ctx = tera::Context::new();
-    let mut notifications = Vec::with_capacity(flashes.len());
-    for (level, message) in &flashes {
-        notifications.push(Notif {
-            level: level.into(),
-            message: message.to_owned(),
-        })
-    }
+    let messages: Vec<Message> = messages.into_iter().collect();
+    ctx.insert("messages", &messages);
 
-    ctx.insert("notifications", &notifications);
-
-    Ok((
-        flashes,
-        state
-            .templates
-            .read()
-            .render("get_gen_token.html", &ctx)?
-            .into(),
-    ))
+    Ok(state
+        .templates
+        .read()
+        .render("get_gen_token.html", &ctx)?
+        .into())
 }
 
-#[tracing::instrument(skip(state, form, flash), level = "debug")]
-pub(crate) async fn create_token(
+#[tracing::instrument(skip(state, form), level = "debug")]
+async fn create_token(
     State(state): State<AppState>,
-    flash: Flash,
+    messages: Messages,
     form: StdResult<Form<GenTokenForm>, axum::extract::rejection::FormRejection>,
-) -> Result<(Flash, Response)> {
+) -> Result<Response> {
     let form = match form {
         Ok(Form(f)) => f,
         Err(err) => {
             tracing::error!("Invalid form submitted {err:?}");
-            let flash = flash.error(&format!("Invalid request submitted: {err:?}"));
+            messages.error(format!("Invalid request submitted: {err:?}"));
             let ctx = tera::Context::new();
             let page: Html<String> = state
                 .templates
                 .read()
                 .render("get_gen_token.html", &ctx)?
                 .into();
-            return Ok((flash, (StatusCode::BAD_REQUEST, page).into_response()));
+            return Ok((StatusCode::BAD_REQUEST, page).into_response());
         }
     };
     tracing::debug!("got GenFormToken: {:?}", form);
@@ -129,28 +116,20 @@ pub(crate) async fn create_token(
             let mut ctx = tera::Context::new();
             tracing::debug!("serializing form into context: {:?}", form);
             ctx.insert("full_form", &form);
-            ctx.insert(
-                "notifications",
-                &vec![Notif {
-                    level: NotifLevel::Error,
-                    message: "A valid token already exist for this path.".to_string(),
-                }],
-            );
+            ctx.insert("error", "A valid token already exist for this path.");
             let page: Html<String> = state
                 .templates
                 .read()
                 .render("get_gen_token.html", &ctx)?
                 .into();
 
-            Ok((
-                flash.error("A valid token already exist for this path."),
-                (StatusCode::CONFLICT, page).into_response(),
-            ))
+            messages.error("A valid token already exist for this path.");
+            Ok((StatusCode::CONFLICT, page).into_response())
         }
-        Ok(tok) => Ok((
-            flash.success("Token created."),
-            Redirect::to(&format!("/f/{}", urlencoding::encode(&tok.path))).into_response(),
-        )),
+        Ok(tok) => {
+            messages.success("Token created.");
+            Ok(Redirect::to(&format!("/f/{}", urlencoding::encode(&tok.path))).into_response())
+        }
     }
 }
 

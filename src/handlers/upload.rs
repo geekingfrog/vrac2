@@ -1,6 +1,6 @@
 use async_zip::error::ZipError;
 use async_zip::{Compression, ZipEntryBuilder};
-use axum::http::{StatusCode, header, HeaderMap};
+use axum::http::{header, HeaderMap, StatusCode};
 use futures::{Future, FutureExt};
 use std::io::ErrorKind;
 use std::pin::Pin;
@@ -10,7 +10,6 @@ use std::task::{Context, Poll};
 use axum::extract::{Multipart, Path, Query};
 use axum::response::{Redirect, Response};
 use axum::{extract::State, response::Html, response::IntoResponse};
-use axum_flash::IncomingFlashes;
 use humantime::format_duration;
 use serde::{de, Deserialize};
 use time::{Duration, OffsetDateTime};
@@ -26,7 +25,6 @@ use pin_project::pin_project;
 
 use crate::db::{DbFile, DbFileMetadata, DbToken, GetTokenResult};
 use crate::error::{AppError, Result};
-use crate::handlers::flash_utils::ctx_from_flashes;
 use crate::state::AppState;
 use crate::upload::{InitFile, StorageBackend};
 
@@ -81,10 +79,9 @@ impl std::convert::From<(DbFile, DbFileMetadata)> for TplFile {
     }
 }
 
-#[tracing::instrument(skip(state, incoming_flashes))]
+#[tracing::instrument(skip(state))]
 pub(crate) async fn get_upload_form(
     state: State<AppState>,
-    incoming_flashes: IncomingFlashes,
     Path(tok_path): Path<String>,
     Query(file_query): Query<FileQuery>,
 ) -> Result<Response> {
@@ -102,19 +99,15 @@ pub(crate) async fn get_upload_form(
                 .render("no_link_found.html", &tera::Context::new())?
                 .into();
             let rsp = (StatusCode::NOT_FOUND, html);
-            Ok((incoming_flashes, rsp).into_response())
+            Ok(rsp.into_response())
         }
-        GetTokenResult::Fresh(tok) => upload_form(state, incoming_flashes, tok).await,
+        GetTokenResult::Fresh(tok) => upload_form(state, tok).await,
         GetTokenResult::Used(tok) => {
             let span = tracing::info_span!("token {}-{}", tok.id, tok.path);
             if file_query.zip {
-                get_files_zip(state, incoming_flashes, tok)
-                    .instrument(span)
-                    .await
+                get_files_zip(state, tok).instrument(span).await
             } else {
-                get_files_html(state, incoming_flashes, tok)
-                    .instrument(span)
-                    .await
+                get_files_html(state, tok).instrument(span).await
             }
         }
     }
@@ -235,17 +228,13 @@ pub(crate) async fn post_upload_form(
     Ok(Redirect::to(&format!("/f/{}", tok_path)).into_response())
 }
 
-async fn upload_form(
-    state: State<AppState>,
-    incoming_flashes: IncomingFlashes,
-    tok: DbToken,
-) -> Result<Response> {
+async fn upload_form(state: State<AppState>, tok: DbToken) -> Result<Response> {
     tracing::info!("fresh token {} - {}", tok.id, tok.path);
     let now = OffsetDateTime::now_utc();
     let duration = tok.valid_until - now;
     let duration = std::time::Duration::from_secs(duration.as_seconds_f64().round() as u64);
 
-    let mut ctx = ctx_from_flashes(&incoming_flashes);
+    let mut ctx = tera::Context::new();
     ctx.insert("max_size", &tok.max_size_mib);
     ctx.insert("valid_for", &format_duration(duration).to_string());
     if let Some(d) = tok.content_expires_after_hours {
@@ -258,14 +247,10 @@ async fn upload_form(
         .read()
         .render("upload_form.html", &ctx)?
         .into();
-    Ok((incoming_flashes, html).into_response())
+    Ok(html.into_response())
 }
 
-async fn get_files_html(
-    state: State<AppState>,
-    incoming_flashes: IncomingFlashes,
-    tok: DbToken,
-) -> Result<Response> {
+async fn get_files_html(state: State<AppState>, tok: DbToken) -> Result<Response> {
     let mut ctx = tera::Context::new();
     ctx.insert(
         "expires_at",
@@ -314,7 +299,7 @@ async fn get_files_html(
         .read()
         .render("get_files.html", &ctx)?
         .into();
-    Ok((incoming_flashes, html).into_response())
+    Ok(html.into_response())
 }
 
 trait IntoIOError {
@@ -359,11 +344,7 @@ impl futures::io::AsyncRead for ZipAsyncReader {
     }
 }
 
-async fn get_files_zip(
-    state: State<AppState>,
-    incoming_flashes: IncomingFlashes,
-    tok: DbToken,
-) -> Result<Response> {
+async fn get_files_zip(state: State<AppState>, tok: DbToken) -> Result<Response> {
     let files = state.db.get_files(tok.id, tok.attempt_counter).await?;
 
     let state = state.clone();
@@ -419,7 +400,7 @@ async fn get_files_zip(
             .unwrap(),
     );
 
-    Ok((incoming_flashes, (headers, body)).into_response())
+    Ok((headers, body).into_response())
 }
 
 #[derive(serde::Deserialize, Debug, Default)]

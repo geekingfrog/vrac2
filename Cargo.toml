@@ -11,8 +11,6 @@ async_zip = { version = "0.0.15", features = ["tokio-fs", "deflate"] }
 aws-config = "0.55.3"
 aws-sdk-s3 = "0.28.0"
 axum = { version = "0.8.9", features = ["form", "multipart", "macros"] }
-# see: https://github.com/davidpdrsn/axum-flash/pull/16
-axum-flash = { git = "https://github.com/davidpdrsn/axum-flash.git", rev = "0832703a0ca83b1ee35daaa8a199f68c2bcb4a90" }
 axum-login = "0.18.0"
 axum-messages = "0.8.0"
 base64 = "0.21.5"

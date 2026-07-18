@@ -590,45 +590,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum-extra"
-version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9963ff19f40c6102c76756ef0a46004c0d58957d87259fc9208ff8441c12ab96"
-dependencies = [
- "axum",
- "axum-core",
- "bytes",
- "cookie",
- "futures-util",
- "http 1.4.2",
- "http-body 1.1.0",
- "http-body-util",
- "mime",
- "pin-project-lite",
- "rustversion",
- "serde_core",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "axum-flash"
-version = "0.8.0"
-source = "git+https://github.com/davidpdrsn/axum-flash.git?rev=0832703a0ca83b1ee35daaa8a199f68c2bcb4a90#0832703a0ca83b1ee35daaa8a199f68c2bcb4a90"
-dependencies = [
- "axum-core",
- "axum-extra",
- "base64 0.22.1",
- "cookie",
- "http 1.4.2",
- "serde",
- "serde_json",
- "tower-layer",
- "tower-service",
-]
-
-[[package]]
 name = "axum-login"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -901,12 +862,7 @@ version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ddef33a339a91ea89fb53151bd0a4689cfce27055c291dfa69945475d22c747"
 dependencies = [
- "base64 0.22.1",
- "hmac 0.12.1",
  "percent-encoding",
- "rand",
- "sha2 0.10.9",
- "subtle",
  "time",
  "version_check",
 ]
@@ -3942,7 +3898,6 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "axum",
- "axum-flash",
  "axum-login",
  "axum-messages",
  "base64 0.21.7",
