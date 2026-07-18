@@ -5,6 +5,7 @@ use crate::{
 };
 use axum::{
     extract::{Query, State},
+    http::StatusCode,
     response::{Html, IntoResponse, Redirect},
     routing, Form, Router,
 };
@@ -14,6 +15,7 @@ pub(crate) fn router(state: AppState) -> Router<()> {
     Router::new()
         .route("/login", routing::get(login_get))
         .route("/login", routing::post(login_post))
+        .route("/logout", routing::get(logout_get))
         .with_state(state)
 }
 
@@ -89,4 +91,11 @@ async fn login_post(
     }
     .into_response();
     Ok(resp)
+}
+
+async fn logout_get(mut auth_session: AuthSession) -> impl IntoResponse {
+    match auth_session.logout().await {
+        Ok(_) => Redirect::to("/login").into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
