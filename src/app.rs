@@ -1,4 +1,3 @@
-use axum::extract::{DefaultBodyLimit, Path};
 use axum::{routing, Router};
 use axum_login::{login_required, AuthManagerLayerBuilder};
 use tower::ServiceBuilder;
@@ -28,30 +27,7 @@ pub fn build(state: AppState) -> Router<()> {
             routing::get(|| async { axum::response::Redirect::temporary("/gen") }),
         )
         .merge(handlers::auth::router(state.clone()))
-        .merge(
-            Router::new()
-                .route(
-                    "/f",
-                    routing::get(|| async { axum::response::Redirect::temporary("/gen") }),
-                )
-                .route(
-                    "/f/{path}",
-                    routing::get(handlers::upload::get_upload_form)
-                        .post(handlers::upload::post_upload_form),
-                )
-                .route(
-                    "/f/{path}/",
-                    routing::get(|Path(p): Path<String>| async move {
-                        axum::response::Redirect::temporary(&format!("/f/{p}"))
-                    }),
-                )
-                .route(
-                    "/f/{path}/{file_id}",
-                    routing::get(handlers::file::get_file),
-                )
-                .layer(DefaultBodyLimit::max(usize::MAX))
-                .with_state(state.clone()),
-        )
+        .merge(handlers::upload::router(state.clone()))
         .nest_service("/static", ServeDir::new("static"))
         .layer(axum_messages::MessagesManagerLayer)
         .layer(auth_layer)

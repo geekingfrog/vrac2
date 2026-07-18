@@ -1,13 +1,14 @@
 use async_zip::error::ZipError;
 use async_zip::{Compression, ZipEntryBuilder};
 use axum::http::{header, HeaderMap, StatusCode};
+use axum::{routing, Router};
 use futures::{Future, FutureExt};
 use std::io::ErrorKind;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
 
-use axum::extract::{Multipart, Path, Query};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query};
 use axum::response::{Redirect, Response};
 use axum::{extract::State, response::Html, response::IntoResponse};
 use humantime::format_duration;
@@ -79,8 +80,32 @@ impl std::convert::From<(DbFile, DbFileMetadata)> for TplFile {
     }
 }
 
+pub(crate) fn router(state: AppState) -> Router<()> {
+    Router::new()
+        .route(
+            "/f",
+            routing::get(|| async { axum::response::Redirect::temporary("/gen") }),
+        )
+        .route(
+            "/f/{path}",
+            routing::get(get_upload_form).post(post_upload_form),
+        )
+        .route(
+            "/f/{path}/",
+            routing::get(|Path(p): Path<String>| async move {
+                axum::response::Redirect::temporary(&format!("/f/{p}"))
+            }),
+        )
+        .route(
+            "/f/{path}/{file_id}",
+            routing::get(crate::handlers::file::get_file),
+        )
+        .layer(DefaultBodyLimit::max(usize::MAX))
+        .with_state(state)
+}
+
 #[tracing::instrument(skip(state))]
-pub(crate) async fn get_upload_form(
+async fn get_upload_form(
     state: State<AppState>,
     Path(tok_path): Path<String>,
     Query(file_query): Query<FileQuery>,
@@ -113,7 +138,7 @@ pub(crate) async fn get_upload_form(
     }
 }
 
-pub(crate) async fn post_upload_form(
+async fn post_upload_form(
     Path(tok_path): Path<String>,
     state: State<AppState>,
     mut multipart: Multipart,
