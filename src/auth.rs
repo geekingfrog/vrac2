@@ -18,6 +18,7 @@ impl AuthUser for db::Account {
 pub struct Credentials {
     pub username: String,
     pub password: String,
+    pub next: Option<String>,
 }
 
 impl std::fmt::Debug for Credentials {

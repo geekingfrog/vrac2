@@ -3,7 +3,11 @@ use crate::{
     error::{AppError, Result},
     state::AppState,
 };
-use axum::{extract::State, response::Html, routing, Form, Router};
+use axum::{
+    extract::{Query, State},
+    response::{Html, IntoResponse, Redirect},
+    routing, Form, Router,
+};
 use axum_messages::Messages;
 
 pub(crate) fn router(state: AppState) -> Router<()> {
@@ -13,11 +17,25 @@ pub(crate) fn router(state: AppState) -> Router<()> {
         .with_state(state)
 }
 
-async fn login_get(messages: Messages, State(state): State<AppState>) -> Result<Html<String>> {
+// to redirect after login
+#[derive(Debug, serde::Deserialize)]
+pub struct NextUrl {
+    next: Option<String>,
+}
+
+#[axum::debug_handler]
+async fn login_get(
+    messages: Messages,
+    Query(next): Query<NextUrl>,
+    State(state): State<AppState>,
+) -> Result<Html<String>> {
     let mut ctx = tera::Context::new();
     let msgs = messages.into_iter().collect::<Vec<_>>();
     tracing::debug!("messages: {:?}", msgs.clone());
     ctx.insert("messages", &msgs);
+    if let Some(next) = next.next {
+        ctx.insert("next", &next);
+    }
     tracing::debug!("raw ctx? {:?}", ctx);
     Ok(state.templates.read().render("login.html", &ctx)?.into())
 }
@@ -27,28 +45,36 @@ async fn login_post(
     State(state): State<AppState>,
     messages: Messages,
     Form(creds): Form<Credentials>,
-) -> Result<Html<String>> {
+) -> Result<impl IntoResponse> {
     tracing::info!("post debug stuff {:?}", creds);
+    let creds_next = creds.next.clone();
     let user = auth_session.authenticate(creds).await;
     tracing::debug!("user? {:?}", user);
-    let ctx = tera::Context::new();
     let user = match user {
         Err(axum_login::Error::Backend(err)) => {
             tracing::debug!("backend error? {err:?}");
             let ctx = tera::Context::new();
             messages.error("Invalid credentials");
-            return Ok(state.templates.read().render("login.html", &ctx)?.into())
+            return Ok(state
+                .templates
+                .read()
+                .render("login.html", &ctx)?
+                .into_response());
         }
         Err(err) => {
             tracing::error!("error on authenticate: {:?}", err);
             return Err(AppError::InternalError {
                 message: format!("{:?}", err),
-            })
+            });
         }
         Ok(None) => {
             let ctx = tera::Context::new();
             messages.error("Invalid credentials");
-            return Ok(state.templates.read().render("login.html", &ctx)?.into())
+            return Ok(state
+                .templates
+                .read()
+                .render("login.html", &ctx)?
+                .into_response());
         }
         Ok(Some(user)) => {
             tracing::info!("logged in as {}", user.username);
@@ -57,8 +83,16 @@ async fn login_post(
     };
 
     if let Err(err) = auth_session.login(&user).await {
-        return Err(AppError::InternalError { message: format!("{err:?}") });
+        return Err(AppError::InternalError {
+            message: format!("{err:?}"),
+        });
     }
     messages.info(format!("Logged in as {}", user.username));
-    Ok(state.templates.read().render("login.html", &ctx)?.into())
+    let resp = if let Some(ref next) = creds_next {
+        Redirect::to(next)
+    } else {
+        Redirect::to("/")
+    }
+    .into_response();
+    Ok(resp)
 }

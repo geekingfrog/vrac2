@@ -16,6 +16,9 @@
             <label for="password">Password:</label>
             <input type="password" id="password" name="password" value="test">
         </p>
+        {% if next is defined %}
+            <input type="hidden" name="next" value="{{ next }}" />
+        {% endif %}
         <input type="submit" name="Login" value="login">
     </form>
 {% endblock body %}
