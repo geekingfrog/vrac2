@@ -31,12 +31,10 @@ async fn login_get(
 ) -> Result<Html<String>> {
     let mut ctx = tera::Context::new();
     let msgs = messages.into_iter().collect::<Vec<_>>();
-    tracing::debug!("messages: {:?}", msgs.clone());
     ctx.insert("messages", &msgs);
     if let Some(next) = next.next {
         ctx.insert("next", &next);
     }
-    tracing::debug!("raw ctx? {:?}", ctx);
     Ok(state.templates.read().render("login.html", &ctx)?.into())
 }
 
@@ -46,13 +44,10 @@ async fn login_post(
     messages: Messages,
     Form(creds): Form<Credentials>,
 ) -> Result<impl IntoResponse> {
-    tracing::info!("post debug stuff {:?}", creds);
     let creds_next = creds.next.clone();
     let user = auth_session.authenticate(creds).await;
-    tracing::debug!("user? {:?}", user);
     let user = match user {
-        Err(axum_login::Error::Backend(err)) => {
-            tracing::debug!("backend error? {err:?}");
+        Err(axum_login::Error::Backend(_err)) => {
             let ctx = tera::Context::new();
             messages.error("Invalid credentials");
             return Ok(state
@@ -77,7 +72,6 @@ async fn login_post(
                 .into_response());
         }
         Ok(Some(user)) => {
-            tracing::info!("logged in as {}", user.username);
             user
         }
     };
