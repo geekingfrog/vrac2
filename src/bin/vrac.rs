@@ -11,7 +11,8 @@ use hyper::{Body, Request};
 use hyper_tls::HttpsConnector;
 use mpart_async::client::MultipartRequest;
 use vrac::handlers::gen::{GenTokenForm, StorageBackendType};
-use vrac::{app::build, state::AppState};
+use vrac::state::State;
+use vrac::app::build;
 
 #[derive(Parser, Debug)]
 #[command(version)]
@@ -97,7 +98,7 @@ async fn serve(
         .open(&sqlite_path)
         .await?;
 
-    let state = AppState::new("templates/**/*.html", &sqlite_path, &storage_path, base_url)
+    let state = State::new("templates/**/*.html", &sqlite_path, &storage_path, base_url)
         .await
         .context("cannot construct app state")?;
     state.db.migrate().await?;

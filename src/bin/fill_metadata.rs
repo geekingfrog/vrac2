@@ -2,7 +2,7 @@
 use anyhow::Context;
 use clap::Parser;
 use sqlx::{sqlite::SqlitePoolOptions, Executor};
-use vrac::state::AppState;
+use vrac::state::State;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
     tracing::debug!("running with args {args:?}");
-    let state = AppState::new(
+    let state = State::new(
         "templates/**/*.html",
         &args.sqlite_path,
         &args.storage_path,

@@ -9,8 +9,10 @@ use crate::{
     upload::{GarageUploader, LocalFsUploader, StorageBackend},
 };
 
+pub type AppState = Arc<State>;
+
 #[derive(Debug, Clone)]
-pub struct AppState {
+pub struct State {
     pub(crate) templates: Arc<RwLock<Tera>>,
     pub base_url: String,
     pub db: DBService,
@@ -18,25 +20,25 @@ pub struct AppState {
     pub garage: GarageUploader,
 }
 
-impl AppState {
+impl State {
     pub async fn new(
         template_path: &str,
         db_path: &str,
         storage_path: &str,
         base_url: String,
-    ) -> Result<Self> {
+    ) -> Result<AppState> {
         let mut tera = Tera::new(template_path)?;
         tera.register_filter("humanize_size", humanize_size);
         let db = DBService::new(db_path).await?;
         let garage = GarageUploader::new().await?;
 
-        Ok(Self {
+        Ok(Arc::new(Self {
             templates: Arc::new(RwLock::new(tera)),
             base_url,
             db,
             storage_fs: LocalFsUploader::new(storage_path),
             garage,
-        })
+        }))
     }
 
     pub async fn get_blob(
