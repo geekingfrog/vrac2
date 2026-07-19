@@ -1,0 +1,17 @@
+{# vim: set ft=jinja #}
+{% component vrac.inline_file(token_path: string, id: integer, name: string, mime_prefix: string, mime_type: string, size: integer) %}
+{% set path = "./" ~ token_path ~ "/" ~ id %}
+<p>
+    {% if mime_prefix == "image" %}
+        <img src="{{ path }}">
+    {% elif mime_prefix == "video" %}
+        <video controls>
+            <source src="{{ path }}" type="{{ mime_type }}">
+        </video>
+    {% endif %}
+</p>
+<p>
+    <a href="{{ path }}" download>📥 Download {{ name }}</a>{%- if mime_type %} ({{ mime_type }}){% endif %}
+    {%- if size %}- {{ size|humanize_size }}{% endif %}
+</p>
+{% endcomponent vrac.inline_file %}

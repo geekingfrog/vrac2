@@ -1,43 +1,40 @@
 {# vim: set ft=jinja #}
-{% import "macros.html" as macros %}
-
-
 {% extends "base.html" %}
-
 {% block title %}Vrac: {{ tok_path }} - files{% endblock title %}
 {% block head %}
-{{ super() }}
-<meta content="summary_large_image" name="twitter:card" property="twitter:card">
-<meta content="Vrac - {{ tok_path }}" name="og:title" property="og:title">
-
-{% if files and files[0].mime_prefix == "image" %}
-<meta content="{{base_url}}/f/{{tok_path}}/{{files[0].id}}" name="og:image" property="og:image">
-{% endif %}
-
-<meta property="og:description" name="og:description" content="{% if files|length <= 1 %}a random file{% else %}some random files{% endif %} {{tok_path}}">
-
-<meta content="{{base_url}}/f/{{tok_path}}" name="og:url" property="og:url">
+    {{ super() }}
+    <meta content="summary_large_image"
+          name="twitter:card"
+          property="twitter:card">
+    <meta content="Vrac - {{ tok_path }}" name="og:title" property="og:title">
+    {% if files and files[0].mime_prefix == "image" %}
+        <meta content="{{ base_url }}/f/{{ tok_path }}/{{ files[0].id }}"
+              name="og:image"
+              property="og:image">
+    {% endif %}
+    <meta property="og:description"
+          name="og:description"
+          content="{% if files|length <= 1 %}a random file{% else %}some random files{% endif %} {{ tok_path }}">
+    <meta content="{{ base_url }}/f/{{ tok_path }}"
+          name="og:url"
+          property="og:url">
 {% endblock head %}
-
 {% block body %}
-  {{ super() }}
-  {%- if expires_at -%}
-this page will expires in {{expires_in}} (at {{ expires_at }} UTC)
-  {% else %}
-    this page will never expires woooo !
-  {%- endif -%}
-
-  <ul class="file-list">
-{% for file in files %}
-<li>{{ macros::inline_file(file=file) }}</li>
-{% endfor %}
-  </ul>
-
-{% if files | length > 1 %}
-<hr>
-<p>
-  <a href="./{{tok_path}}?zip" download>📥 Download all files as zip</a>
-</p>
-{% endif %}
-
+    {{ super() }}
+    {%- if expires_at -%}
+        this page will expires in {{ expires_in }} (at {{ expires_at }} UTC)
+    {% else %}
+        this page will never expires woooo !
+    {%- endif -%}
+    <ul class="file-list">
+        {% for file in files %}
+            <li>{{ <vrac.inline_file token_path={token_path} id={file.id} name={file.name} mime_prefix={file.mime_prefix} mime_type={file.mime_type} size={file.size} /> }}</li>
+        {% endfor %}
+    </ul>
+    {% if files | length > 1 %}
+        <hr>
+        <p>
+            <a href="./{{ tok_path }}?zip" download>📥 Download all files as zip</a>
+        </p>
+    {% endif %}
 {% endblock body %}

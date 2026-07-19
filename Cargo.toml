@@ -40,7 +40,7 @@ sqlx = { version = "0.7.2", features = [
   "sqlite",
   "time",
 ] }
-tera = { version = "1.19.1", features = ["builtins"] }
+tera = { version = "2", features = ["glob_fs"] }
 thiserror = "1.0.50"
 time = { version = "0.3.53", features = ["macros"] }
 tokio = { version = "1.33.0", features = ["full"] }

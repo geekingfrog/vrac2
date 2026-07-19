@@ -27,7 +27,9 @@ impl State {
         storage_path: &str,
         base_url: String,
     ) -> Result<AppState> {
-        let mut tera = Tera::new(template_path)?;
+        let mut tera = Tera::default();
+        tera.register_filter("humanize_size", humanize_size);
+        tera.load_from_glob(template_path)?;
         tera.register_filter("humanize_size", humanize_size);
         let db = DBService::new(db_path).await?;
         let garage = GarageUploader::new().await?;
