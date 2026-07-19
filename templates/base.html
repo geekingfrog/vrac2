@@ -7,18 +7,19 @@
                 {% block title %}
                 {% endblock title %}
             </title>
+            <link rel="stylesheet" href="/static/pico.green.min.css">
             <link rel="stylesheet" href="/static/styles.css">
         {% endblock head %}
     </head>
     <body>
-        {% if (messages is defined) and (messages|length > 0) %}
-            <ul>
+        <main class="container">
+            {% if (messages is defined) and (messages|length > 0) %}
                 {% for msg in messages %}
-                    <li>[{{ msg.l }}] {{ msg.m }}</li>
+                    <article class="message {{ msg.l|lower }}">{{ msg.m }}</article>
                 {% endfor %}
-            </ul>
-        {% endif %}
-        {% block body %}
-        {% endblock body %}
+            {% endif %}
+            {% block body %}
+            {% endblock body %}
+        </main>
     </body>
 </html>

@@ -1,51 +1,6 @@
-body {
-  max-width: 80vw;
-  margin: 2rem auto;
-}
-
-.notif {
-  padding: 0.8rem;
-  text-align: center;
-  border-radius: 0.5rem;
-  background-color: rgba(0,0,0,0.1);
-}
-
-.notif.Success {
-  background-color: rgba(0,230,50,0.8);
-}
-
-.notif.Warning {
-  background-color: rgba(230,230,0,0.8);
-}
-
-.notif.Error {
-  background-color: rgba(230,30,0,0.8);
-}
-
-.gen-form {
-  margin: 0 auto;
-  display: block;
-  width: 40rem;
-}
-
-.gen-form .option {
-  display: inline-block;
-  margin: 0 0.2rem;
-  color: rgb(80,80,80);
-}
-
-.gen-form .option:hover { cursor: pointer; }
-.gen-form .option *:hover { cursor: pointer; }
-
-.option input:checked ~ label {
-  color: black;
-}
-
-.gen-form fieldset { margin: 1rem 0; }
-
 .upload-form img,
-.file-list img,
-.file-list video {
+.file-preview img,
+.file-preview video {
   max-width: 100%;
   max-height: 80vh;
 }
@@ -54,11 +9,21 @@ body {
   cursor: pointer;
 }
 
-
-.file-list {
-  list-style-type: none;
+.upload-form img:hover {
+  cursor: pointer;
 }
 
-.file-list li {
-  padding-top: 1rem;
+.message {
+  &.error {
+    --msg-color: rgb(241, 121, 97);
+  }
+
+  &.info {
+    --msg-color: rgb(208, 210, 250);
+  }
+
+  &.success {
+    --msg-color: rgb(33, 226, 153);
+  }
+  background-color: var(--msg-color);
 }

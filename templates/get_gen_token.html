@@ -2,151 +2,127 @@
 {% extends "base.html" %}
 {% block title %}Generate an upload link{% endblock title %}
 {% block head %} {{ super() }} {% endblock head %}
-
 {% block body %}
-  {{ super() }}
-  {% if error is defined %}
-    <p class="notif error"> {{error}}</p>
-  {% endif %}
-  <form class="gen-form" action="/gen" method="POST">
-
-    <div>
-      <label for="path">Path</label>
-      <input name="path" id="path" type="text" size="42" maxLength="40" spellcheck="no"
-      required autofocus
-      {% if full_form and full_form['path'] %}
-      value="{{full_form['path']}}"
-      {% else %}
-      placeholder="coucou"
-      {% endif %}>
-    </div>
-
-    <fieldset>
-      <legend>Max size:</legend>
-
-      <div class="option">
-        <input type="radio" name="max-size-mib" value="1" id="max-size-1MB"
-        {% if full_form and full_form['max-size-mib'] == "1" %} checked {% endif %}
-        ><label for="max-size-1MB">1 MB</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="max-size-mib" value="10" id="max-size-10MB"
-        {% if not full_form or full_form['max-size-mib'] == "10" %} checked {% endif %}
-        ><label for="max-size-10MB">10 MB</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="max-size-mib" value="200" id="max-size-200MB"
-        {% if full_form and full_form['max-size-mib'] == "200" %} checked {% endif %}
-        ><label for="max-size-200MB">200 MB</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="max-size-mib" value="1024" id="max-size-1GiB"
-        {% if full_form and full_form['max-size-mib'] == "1024" %} checked {% endif %}
-        ><label for="max-size-1GiB">1 GiB</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="max-size-mib" value="5120" id="max-size-5GB"
-        {% if full_form and full_form['max-size-mib'] == "5120" %} checked {% endif %}
-        ><label for="max-size-5GB">5 GiB</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="max-size-mib" value="None" id="max-size-unlimited"
-        {% if full_form and not full_form['max-size-mib'] %} checked {% endif %}
-        ><label for="max-size-unlimited">Unlimited</label>
-      </div>
-
-    </fieldset>
-
-    <fieldset>
-      <legend>Content expires after:</legend>
-
-      <div class="option">
-        <input type="radio" name="content-expires" value="1" id="expires-1h"
-        {% if full_form and full_form['content-expires'] == "1" %} checked {% endif %}
-        ><label for="expires-1h">1 hour</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="content-expires" value="24" id="expires-1d"
-        {% if full_form is undefined or full_form and full_form['content-expires'] == "24" %} checked {% endif %}
-        ><label for="expires-1d">1 day</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="content-expires" value="168" id="expires-1w"
-        {% if full_form and full_form['content-expires'] == "168" %} checked {% endif %}
-        ><label for="expires-1w">1 week</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="content-expires" value="744" id="expires-1m"
-        {% if full_form and full_form['content-expires'] == "744" %} checked {% endif %}
-        ><label for="expires-1m">1 month</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="content-expires" value="None" id="expires-not"
-        {% if full_form and not full_form['content-expires'] %} checked {% endif %}
-        ><label for="expires-not">Doesn't expire</label>
-      </div>
-    </fieldset>
-
-
-    <fieldset>
-      <legend>Link valid for</legend>
-
-      <div class="option">
-        <input type="radio" name="token-valid-for-hour" value="1" id="valid-for-1h"
-          {% if full_form and full_form['token-valid-for-hour'] == 1 %} checked {% endif %}
-        ><label for="valid-for-1h">1 hour</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="token-valid-for-hour" value="24" id="valid-for-1d"
-          {% if not full_form or full_form['token-valid-for-hour'] == 24 %} checked {% endif %}
-        ><label for="valid-for-1d">1 day</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="token-valid-for-hour" value="168" id="valid-for-1w"
-          {% if full_form and full_form['token-valid-for-hour'] == 168 %} checked {% endif %}
-        ><label for="valid-for-1w">1 week</label>
-      </div>
-
-      <div class="option">
-        <input type="radio" name="token-valid-for-hour" value="744" id="valid-for-1m"
-          {% if full_form and full_form['token-valid-for-hour'] == 744 %} checked {% endif %}
-        ><label for="valid-for-1m">1 month</label>
-      </div>
-    </fieldset>
-
-    <fieldset>
-      <legend>Storage backend</legend>
-      <div>
-        <input type="radio" name="storage-backend" id="local_fs" value="local_fs"
-          {% if not full_form or full_form["storage-backend"] == "local_fs" %} checked {% endif %}
-        default>
-        <label for="local_fs">Local filesystem</label>
-      </div>
-
-      <div>
-        <input type="radio" name="storage-backend" id="garage" value="garage"
-          {% if full_form and full_form["storage-backend"] == "garage" %} checked {% endif %}
-        >
-        <label for="garage">Garage (S3)</label>
-      </div>
-    </fieldset>
-
-    <hr>
-
-    <div>
-      <button type="submit">OK</button>
-    </div>
-  </form>
-
+    {{ super() }}
+    {% if error is defined %}
+        <article class="message error">{{ error }}</article>
+    {% endif %}
+    <form class="gen-form" action="/gen" method="POST">
+        <div>
+            <label for="path">Path</label>
+            <input name="path"
+                   id="path"
+                   type="text"
+                   size="42"
+                   maxLength="40"
+                   spellcheck="no"
+                   required
+                   autofocus
+                   {% if full_form and full_form['path'] %} value="{{ full_form['path'] }}" {% else %} placeholder="coucou" {% endif %}>
+        </div>
+        <fieldset>
+            <legend>Max size:</legend>
+            <input type="radio"
+                   name="max-size-mib"
+                   value="1"
+                   id="max-size-1MB"
+                   {% if full_form and full_form['max-size-mib'] == "1" %}checked{% endif %}><label for="max-size-1MB">1 MB</label>
+            <input type="radio"
+                   name="max-size-mib"
+                   value="10"
+                   id="max-size-10MB"
+                   {% if not full_form or full_form['max-size-mib'] == "10" %}checked{% endif %}><label for="max-size-10MB">10 MB</label>
+            <input type="radio"
+                   name="max-size-mib"
+                   value="200"
+                   id="max-size-200MB"
+                   {% if full_form and full_form['max-size-mib'] == "200" %}checked{% endif %}><label for="max-size-200MB">200 MB</label>
+            <input type="radio"
+                   name="max-size-mib"
+                   value="1024"
+                   id="max-size-1GiB"
+                   {% if full_form and full_form['max-size-mib'] == "1024" %}checked{% endif %}><label for="max-size-1GiB">1 GiB</label>
+            <input type="radio"
+                   name="max-size-mib"
+                   value="5120"
+                   id="max-size-5GB"
+                   {% if full_form and full_form['max-size-mib'] == "5120" %}checked{% endif %}><label for="max-size-5GB">5 GiB</label>
+            <input type="radio"
+                   name="max-size-mib"
+                   value="None"
+                   id="max-size-unlimited"
+                   {% if full_form and not full_form['max-size-mib'] %}checked{% endif %}><label for="max-size-unlimited">Unlimited</label>
+        </fieldset>
+        <fieldset>
+            <legend>Content expires after:</legend>
+            <input type="radio"
+                   name="content-expires"
+                   value="1"
+                   id="expires-1h"
+                   {% if full_form and full_form['content-expires'] == "1" %}checked{% endif %}><label for="expires-1h">1 hour</label>
+            <input type="radio"
+                   name="content-expires"
+                   value="24"
+                   id="expires-1d"
+                   {% if full_form is undefined or full_form and full_form['content-expires'] == "24" %}checked{% endif %}><label for="expires-1d">1 day</label>
+            <input type="radio"
+                   name="content-expires"
+                   value="168"
+                   id="expires-1w"
+                   {% if full_form and full_form['content-expires'] == "168" %}checked{% endif %}><label for="expires-1w">1 week</label>
+            <input type="radio"
+                   name="content-expires"
+                   value="744"
+                   id="expires-1m"
+                   {% if full_form and full_form['content-expires'] == "744" %}checked{% endif %}><label for="expires-1m">1 month</label>
+            <input type="radio"
+                   name="content-expires"
+                   value="None"
+                   id="expires-not"
+                   {% if full_form and not full_form['content-expires'] %}checked{% endif %}><label for="expires-not">Doesn't expire</label>
+        </fieldset>
+        <fieldset>
+            <legend>Link valid for</legend>
+            <input type="radio"
+                   name="token-valid-for-hour"
+                   value="1"
+                   id="valid-for-1h"
+                   {% if full_form and full_form['token-valid-for-hour'] == 1 %}checked{% endif %}><label for="valid-for-1h">1 hour</label>
+            <input type="radio"
+                   name="token-valid-for-hour"
+                   value="24"
+                   id="valid-for-1d"
+                   {% if not full_form or full_form['token-valid-for-hour'] == 24 %}checked{% endif %}><label for="valid-for-1d">1 day</label>
+            <input type="radio"
+                   name="token-valid-for-hour"
+                   value="168"
+                   id="valid-for-1w"
+                   {% if full_form and full_form['token-valid-for-hour'] == 168 %}checked{% endif %}><label for="valid-for-1w">1 week</label>
+            <input type="radio"
+                   name="token-valid-for-hour"
+                   value="744"
+                   id="valid-for-1m"
+                   {% if full_form and full_form['token-valid-for-hour'] == 744 %}checked{% endif %}><label for="valid-for-1m">1 month</label>
+        </fieldset>
+        <fieldset>
+            <legend>Storage backend</legend>
+            <input type="radio"
+                   name="storage-backend"
+                   id="local_fs"
+                   value="local_fs"
+                   {% if not full_form or full_form["storage-backend"] == "local_fs" %}checked{% endif %}
+                   default>
+            <label for="local_fs">Local filesystem</label>
+            <input type="radio"
+                   name="storage-backend"
+                   id="garage"
+                   value="garage"
+                   {% if full_form and full_form["storage-backend"] == "garage" %}checked{% endif %}>
+            <label for="garage">Garage (S3)</label>
+        </fieldset>
+        <hr>
+        <div>
+            <button type="submit">OK</button>
+        </div>
+    </form>
 {% endblock body %}

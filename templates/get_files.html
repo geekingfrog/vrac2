@@ -26,11 +26,11 @@
     {% else %}
         this page will never expires woooo !
     {%- endif -%}
-    <ul class="file-list">
+    <p class="file-list">
         {% for file in files %}
-            <li>{{ <vrac.inline_file token_path={token_path} id={file.id} name={file.name} mime_prefix={file.mime_prefix} mime_type={file.mime_type} size={file.size} /> }}</li>
+            {{ <vrac.inline_file token_path={token_path} id={file.id} name={file.name} mime_prefix={file.mime_prefix} mime_type={file.mime_type} size={file.size} /> }}
         {% endfor %}
-    </ul>
+    </p>
     {% if files | length > 1 %}
         <hr>
         <p>
