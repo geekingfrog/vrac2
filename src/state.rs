@@ -1,4 +1,4 @@
-use parking_lot::RwLock;
+use parking_lot::{RwLock, RwLockReadGuard};
 use std::sync::Arc;
 use tera::Tera;
 
@@ -30,7 +30,6 @@ impl State {
         let mut tera = Tera::default();
         tera.register_filter("humanize_size", humanize_size);
         tera.load_from_glob(template_path)?;
-        tera.register_filter("humanize_size", humanize_size);
         let db = DBService::new(db_path).await?;
         let garage = GarageUploader::new().await?;
 
@@ -63,5 +62,13 @@ impl State {
             }
         };
         Ok(blob)
+    }
+
+    pub fn get_templates(&'_ self) -> RwLockReadGuard<'_, Tera> {
+        if cfg!(debug_assertions) {
+            let mut tera = self.templates.write();
+            tera.full_reload().expect("reloading template");
+        }
+        self.templates.read()
     }
 }

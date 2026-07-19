@@ -65,8 +65,7 @@ async fn get_token(
     ctx.insert("messages", &messages);
 
     Ok(state
-        .templates
-        .read()
+        .get_templates()
         .render("get_gen_token.html", &ctx)?
         .into())
 }
@@ -84,8 +83,7 @@ async fn create_token(
             messages.error(format!("Invalid request submitted: {err:?}"));
             let ctx = tera::Context::new();
             let page: Html<String> = state
-                .templates
-                .read()
+                .get_templates()
                 .render("get_gen_token.html", &ctx)?
                 .into();
             return Ok((StatusCode::BAD_REQUEST, page).into_response());
@@ -118,8 +116,7 @@ async fn create_token(
             ctx.insert("full_form", &form);
             ctx.insert("error", "A valid token already exist for this path.");
             let page: Html<String> = state
-                .templates
-                .read()
+                .get_templates()
                 .render("get_gen_token.html", &ctx)?
                 .into();
 

@@ -42,7 +42,7 @@ async fn login_get(
     if let Some(next) = next.next {
         ctx.insert("next", &next);
     }
-    Ok(state.templates.read().render("login.html", &ctx)?.into())
+    Ok(state.get_templates().render("login.html", &ctx)?.into())
 }
 
 async fn login_post(
@@ -58,8 +58,7 @@ async fn login_post(
             let ctx = tera::Context::new();
             messages.error("Invalid credentials");
             return Ok(state
-                .templates
-                .read()
+                .get_templates()
                 .render("login.html", &ctx)?
                 .into_response());
         }
@@ -73,8 +72,7 @@ async fn login_post(
             let ctx = tera::Context::new();
             messages.error("Invalid credentials");
             return Ok(state
-                .templates
-                .read()
+                .get_templates()
                 .render("login.html", &ctx)?
                 .into_response());
         }

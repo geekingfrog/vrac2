@@ -119,8 +119,7 @@ async fn get_upload_form(
     match state.db.get_valid_token(&tok_path).await? {
         GetTokenResult::NotFound => {
             let html: Html<String> = state
-                .templates
-                .read()
+                .get_templates()
                 .render("no_link_found.html", &tera::Context::new())?
                 .into();
             let rsp = (StatusCode::NOT_FOUND, html);
@@ -155,8 +154,7 @@ async fn post_upload_form(
         GetTokenResult::Fresh(t) => t,
         GetTokenResult::NotFound | GetTokenResult::Used(_) => {
             let not_found = state
-                .templates
-                .read()
+                .get_templates()
                 .render("no_link_found.html", &tera::Context::new())?;
             return Ok(not_found.into_response());
         }
@@ -268,8 +266,7 @@ async fn upload_form(state: State<AppState>, tok: DbToken) -> Result<Response> {
     }
 
     let html: Html<String> = state
-        .templates
-        .read()
+        .get_templates()
         .render("upload_form.html", &ctx)?
         .into();
     Ok(html.into_response())
@@ -319,11 +316,7 @@ async fn get_files_html(state: State<AppState>, tok: DbToken) -> Result<Response
     ctx.insert("files", &files);
     ctx.insert("tok_path", &tok.path);
 
-    let html: Html<String> = state
-        .templates
-        .read()
-        .render("get_files.html", &ctx)?
-        .into();
+    let html: Html<String> = state.get_templates().render("get_files.html", &ctx)?.into();
     Ok(html.into_response())
 }
 
