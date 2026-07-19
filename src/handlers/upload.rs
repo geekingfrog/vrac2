@@ -2,7 +2,6 @@ use async_zip::error::ZipError;
 use async_zip::{Compression, ZipEntryBuilder};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::{routing, Router};
-use futures::{Future, FutureExt};
 use std::io::ErrorKind;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -17,10 +16,8 @@ use time::{Duration, OffsetDateTime};
 use tracing::Instrument;
 
 use futures::TryStreamExt;
-use tokio::io::{AsyncWrite, DuplexStream};
-use tokio_util::compat::{
-    Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt,
-};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use pin_project::pin_project;
 
@@ -104,7 +101,6 @@ pub(crate) fn router(state: AppState) -> Router<()> {
         .with_state(state)
 }
 
-#[tracing::instrument(skip(state))]
 async fn get_upload_form(
     state: State<AppState>,
     Path(tok_path): Path<String>,
@@ -338,75 +334,22 @@ impl IntoIOError for crate::error::AppError {
     }
 }
 
-#[pin_project]
-struct ZipAsyncReader {
-    #[pin]
-    rdr: Compat<DuplexStream>,
-    fut_wrt: Pin<Box<dyn Future<Output = std::io::Result<()>> + Send>>,
-}
-
-impl futures::io::AsyncRead for ZipAsyncReader {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<std::io::Result<usize>> {
-        // attempt to write more into the buffer
-        match self.fut_wrt.poll_unpin(cx) {
-            Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-            _ => (),
-        };
-
-        let n = futures::ready!(self.project().rdr.poll_read(cx, buf))?;
-        Poll::Ready(Ok(n))
-    }
-}
-
 async fn get_files_zip(state: State<AppState>, tok: DbToken) -> Result<Response> {
+    tracing::debug!("getting zip files for {tok:?}");
     let files = state.db.get_files(tok.id, tok.attempt_counter).await?;
 
     let state = state.clone();
-    let (rdr, wrt) = tokio::io::duplex(4096);
-    let fut = async move {
-        let mut zip_wrt = async_zip::base::write::ZipFileWriter::new(wrt.compat());
-        for (file, _metadata) in files {
-            match file.backend_type.as_str() {
-                "local_fs" => {
-                    let data = serde_json::from_str(&file.backend_data)?;
-                    let blob = state
-                        .garage
-                        .read_blob(data)
-                        .await
-                        .map_err(|e| e.into_io_error())?
-                        .compat();
-                    let filename = file.name.unwrap_or_else(|| format!("{}", file.id));
-                    let opts = ZipEntryBuilder::new(filename.into(), Compression::Deflate);
-                    let mut entry = zip_wrt
-                        .write_entry_stream(opts)
-                        .await
-                        .map_err(|e| e.into_io_error())?;
-                    futures::io::copy(blob, &mut entry).await?;
-                    entry.close().await.map_err(|e| e.into_io_error())?;
-                }
-                x => {
-                    tracing::error!("Unexpected backend type {} for file {}", x, file.id);
-                    return Err(AppError::UnknownStorageBackend(x.to_string()).into_io_error());
-                }
-            }
+    let (rdr, wrt) = tokio::io::simplex(4096 * 2);
+
+    let tok_path = tok.path.clone();
+    tokio::spawn(async move {
+        match stream_archive(&state, files, wrt).await {
+            Ok(()) => tracing::debug!("Done writing archive at {}", tok_path),
+            Err(err) => tracing::error!("Error writing archive at {}: {err:?}", tok_path),
         }
+    });
 
-        zip_wrt.close().await.map_err(|e| e.into_io_error())?;
-
-        let result: std::io::Result<()> = Ok(());
-        result
-    };
-
-    let zar = ZipAsyncReader {
-        rdr: rdr.compat(),
-        fut_wrt: Box::pin(fut.fuse()),
-    };
-
-    let stream = tokio_util::io::ReaderStream::new(zar.compat());
+    let stream = tokio_util::io::ReaderStream::new(rdr);
     let body = axum::body::Body::from_stream(stream);
 
     let mut headers = HeaderMap::new();
@@ -419,6 +362,47 @@ async fn get_files_zip(state: State<AppState>, tok: DbToken) -> Result<Response>
     );
 
     Ok((headers, body).into_response())
+}
+
+async fn stream_archive<W>(
+    state: &AppState,
+    files: Vec<(DbFile, DbFileMetadata)>,
+    mut wrt: W,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut zip_wrt = async_zip::base::write::ZipFileWriter::with_tokio(&mut wrt);
+
+    for (file, _metadata) in files {
+        let blob = state
+            .get_blob(&file.backend_type, file.backend_data)
+            .await?;
+        let filename = file.name.unwrap_or_else(|| format!("{}", file.id));
+        let opts = ZipEntryBuilder::new(filename.clone().into(), Compression::Deflate);
+        let mut entry = zip_wrt
+            .write_entry_stream(opts)
+            .await
+            .map_err(|e| e.into_io_error())?;
+        let bytes = futures::io::copy(blob.compat(), &mut entry).await?;
+        entry.close().await.map_err(|e| e.into_io_error())?;
+        tracing::debug!("done writing {bytes} bytes to entry {:?}", filename);
+    }
+
+    match zip_wrt.close().await {
+        Ok(blah) => {
+            blah.into_inner().shutdown().await?;
+            wrt.shutdown().await?;
+        }
+        Err(err) => {
+            tracing::error!("error closing zip file! {err:?}");
+            return Err(AppError::InternalError {
+                message: format!("{err:?}"),
+            });
+        }
+    };
+
+    Ok(())
 }
 
 #[derive(serde::Deserialize, Debug, Default)]
