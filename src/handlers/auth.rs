@@ -47,34 +47,26 @@ async fn login_get(
 
 async fn login_post(
     mut auth_session: AuthSession,
-    State(state): State<AppState>,
     messages: Messages,
     Form(creds): Form<Credentials>,
 ) -> Result<impl IntoResponse> {
     let creds_next = creds.next.clone();
     let user = auth_session.authenticate(creds).await;
     let user = match user {
-        Err(axum_login::Error::Backend(_err)) => {
-            let ctx = tera::Context::new();
-            messages.error("Invalid credentials");
-            return Ok(state
-                .get_templates()
-                .render("login.html", &ctx)?
-                .into_response());
+        Err(axum_login::Error::Backend(_)) | Ok(None) => {
+            messages.error("invalid credentials");
+            let login_url = if let Some(next) = creds_next {
+                format!("/login?next={next}")
+            } else {
+                "/login".to_string()
+            };
+            return Ok(Redirect::to(&login_url).into_response());
         }
         Err(err) => {
             tracing::error!("error on authenticate: {:?}", err);
             return Err(AppError::InternalError {
                 message: format!("{:?}", err),
             });
-        }
-        Ok(None) => {
-            let ctx = tera::Context::new();
-            messages.error("Invalid credentials");
-            return Ok(state
-                .get_templates()
-                .render("login.html", &ctx)?
-                .into_response());
         }
         Ok(Some(user)) => user,
     };
