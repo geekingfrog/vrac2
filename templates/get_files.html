@@ -28,7 +28,7 @@
     {%- endif -%}
     <p class="file-list">
         {% for file in files %}
-            {{ <vrac.inline_file token_path={token_path} id={file.id} name={file.name} mime_prefix={file.mime_prefix} mime_type={file.mime_type} size={file.size} /> }}
+            {{ <vrac.inline_file token_path={token_path} id={file.id} name={file.name} mime_prefix={file.mime_prefix or ""} mime_type={file.mime_type} size={file.size} /> }}
         {% endfor %}
     </p>
     {% if files | length > 1 %}

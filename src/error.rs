@@ -108,6 +108,14 @@ impl From<MultipartError> for AppError {
     }
 }
 
+impl From<tower_sessions::session::Error> for AppError {
+    fn from(err: tower_sessions::session::Error) -> Self {
+        AppError::InternalError {
+            message: format!("{err:?}"),
+        }
+    }
+}
+
 pub(crate) trait DBErrorContext<T> {
     fn with_context<C, F>(self, f: F) -> Result<T>
     where

@@ -1,13 +1,18 @@
 use async_zip::error::ZipError;
 use async_zip::{Compression, ZipEntryBuilder};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::{routing, Router};
+use axum::{routing, Form, Router};
+use axum_messages::{Message, Messages};
+use scrypt::password_hash::PasswordVerifier;
+use scrypt::phc::PasswordHash;
+use scrypt::Scrypt;
 use std::io::ErrorKind;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
+use tower_sessions::Session;
 
-use axum::extract::{DefaultBodyLimit, Multipart, Path, Query};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Query};
 use axum::response::{Redirect, Response};
 use axum::{extract::State, response::Html, response::IntoResponse};
 use humantime::format_duration;
@@ -56,8 +61,8 @@ impl futures::AsyncWrite for FutureFile {
 #[derive(serde::Serialize, Debug)]
 struct TplFile {
     id: i64,
-    mime_type: Option<String>,
-    mime_prefix: Option<String>,
+    mime_type: String,
+    mime_prefix: String,
     name: Option<String>,
     size: Option<i64>,
 }
@@ -66,11 +71,14 @@ impl std::convert::From<(DbFile, DbFileMetadata)> for TplFile {
     fn from((f, m): (DbFile, DbFileMetadata)) -> Self {
         Self {
             id: f.id,
-            mime_type: f.mime_type.clone(),
-            mime_prefix: f.mime_type.and_then(|m| match m.split_once('/') {
-                Some((x, _)) => Some(x.to_string()),
-                None => None,
-            }),
+            mime_type: f.mime_type.clone().unwrap_or("".to_string()),
+            mime_prefix: f
+                .mime_type
+                .and_then(|m| match m.split_once('/') {
+                    Some((x, _)) => Some(x.to_string()),
+                    None => Some("".to_string()),
+                })
+                .unwrap_or("".to_string()),
             name: f.name,
             size: m.size_b,
         }
@@ -94,6 +102,10 @@ pub(crate) fn router(state: AppState) -> Router<()> {
             }),
         )
         .route(
+            "/f/{path}/_password",
+            routing::get(file_password_get).post(file_password_post),
+        )
+        .route(
             "/f/{path}/{file_id}",
             routing::get(crate::handlers::file::get_file),
         )
@@ -101,9 +113,24 @@ pub(crate) fn router(state: AppState) -> Router<()> {
         .with_state(state)
 }
 
+// impl<S> FromRequestParts<S> for GetTokenResult
+// where
+//     S: Send + Sync,
+// {
+//     type Rejection = AppError;
+//
+//     async fn from_request_parts(
+//         parts: &mut axum::http::request::Parts,
+//         _state: &S,
+//     ) -> Result<Self> {
+//         todo!()
+//     }
+// }
+
 async fn get_upload_form(
     state: State<AppState>,
     Path(tok_path): Path<String>,
+    session: Session,
     Query(file_query): Query<FileQuery>,
 ) -> Result<Response> {
     let tok_path =
@@ -127,7 +154,7 @@ async fn get_upload_form(
             if file_query.zip {
                 get_files_zip(state, tok).instrument(span).await
             } else {
-                get_files_html(state, tok).instrument(span).await
+                get_files_html(state, session, tok).instrument(span).await
             }
         }
     }
@@ -167,11 +194,19 @@ async fn post_upload_form(
             ));
         };
 
-    let token = state.db.initiate_upload(token).await?;
+    let mut token = state.db.initiate_upload(token).await?;
 
     let mut total_bytes = 0;
     let mut file_idx = 0;
     while let Some(field) = multipart.next_field().await? {
+        if field.name() == Some("password") {
+            let plain_pass = field.text().await?;
+            if plain_pass != "" {
+                token.set_password(plain_pass.as_bytes())?;
+            }
+            continue;
+        }
+
         file_idx += 1;
         tracing::info!(
             "got a new field here {:?} of type {:?} for file {:?}",
@@ -268,7 +303,21 @@ async fn upload_form(state: State<AppState>, tok: DbToken) -> Result<Response> {
     Ok(html.into_response())
 }
 
-async fn get_files_html(state: State<AppState>, tok: DbToken) -> Result<Response> {
+async fn get_files_html(
+    state: State<AppState>,
+    session: Session,
+    tok: DbToken,
+) -> Result<Response> {
+    tracing::debug!("db token? {tok:?}");
+    if should_ask_password(&tok, &session).await? {
+        let uri = format!("{}/_password", tok.get_url());
+        Ok(Redirect::to(&uri).into_response())
+    } else {
+        render_files(state, tok).await
+    }
+}
+
+async fn render_files(state: State<AppState>, tok: DbToken) -> Result<Response> {
     let mut ctx = tera::Context::new();
     ctx.insert(
         "expires_at",
@@ -421,4 +470,114 @@ where
         None | Some("") => Ok(true),
         Some(s) => FromStr::from_str(s).map_err(de::Error::custom),
     }
+}
+
+#[derive(Deserialize)]
+struct FilePasswordForm {
+    password: String,
+}
+
+async fn file_password_get(
+    state: State<AppState>,
+    messages: Messages,
+    session: Session,
+    Path(tok_path): Path<String>,
+) -> Result<Response> {
+    let tok_path =
+        urlencoding::decode(&tok_path).map_err(|e| crate::error::AppError::InvalidUrlToken {
+            token: tok_path.clone(),
+            source: e,
+        })?;
+
+    let token = match state.db.get_valid_token(&tok_path).await? {
+        GetTokenResult::Fresh(t) => return Ok(Redirect::to(&t.get_url()).into_response()),
+        GetTokenResult::NotFound => {
+            let not_found = state
+                .get_templates()
+                .render("no_link_found.html", &tera::Context::new())?;
+            return Ok(not_found.into_response());
+        }
+        GetTokenResult::Used(t) => t,
+    };
+
+    if !should_ask_password(&token, &session).await? {
+        return Ok(Redirect::to(&token.get_url()).into_response());
+    }
+
+    let uri = format!("{}/_password", token.get_url());
+    tracing::debug!("uri for form action? {uri}");
+    let mut ctx = tera::Context::new();
+    ctx.insert("action", &uri);
+    let messages: Vec<Message> = messages.into_iter().collect();
+    ctx.insert("messages", &messages);
+    let html: Html<String> = state
+        .get_templates()
+        .render("ask_for_password.html", &ctx)?
+        .into();
+    Ok(html.into_response())
+}
+
+async fn file_password_post(
+    state: State<AppState>,
+    session: Session,
+    messages: Messages,
+    Path(tok_path): Path<String>,
+    Form(file_password): Form<FilePasswordForm>,
+) -> Result<Response> {
+    let tok_path =
+        urlencoding::decode(&tok_path).map_err(|e| crate::error::AppError::InvalidUrlToken {
+            token: tok_path.clone(),
+            source: e,
+        })?;
+
+    let token = match state.db.get_valid_token(&tok_path).await? {
+        GetTokenResult::Fresh(t) => return Ok(Redirect::to(&t.get_url()).into_response()),
+        GetTokenResult::NotFound => {
+            let not_found = state
+                .get_templates()
+                .render("no_link_found.html", &tera::Context::new())?;
+            return Ok(not_found.into_response());
+        }
+        GetTokenResult::Used(t) => t,
+    };
+
+    let verifier = match &token.password {
+        None => return Ok(Redirect::to(&token.get_url()).into_response()),
+        Some(hash) => PasswordHash::new(hash).map_err(|_e| AppError::InternalError {
+            message: format!("Invalid hash for token {}", token.id),
+        })?,
+    };
+
+    match Scrypt::default().verify_password(file_password.password.as_bytes(), &verifier) {
+        Err(_) => {
+            messages.error("Invalid password");
+            let uri = format!("{}/_password", token.get_url());
+            Ok(Redirect::to(&uri).into_response())
+        }
+        Ok(()) => {
+            session
+                .insert_value(&token.id.to_string(), serde_json::Value::Bool(true))
+                .await?;
+            Ok(Redirect::to(&token.get_url()).into_response())
+        }
+    }
+}
+
+impl DbToken {
+    fn get_url(&self) -> String {
+        let path = urlencoding::encode(&self.path);
+        format!("/f/{path}")
+    }
+}
+
+async fn should_ask_password(tok: &DbToken, session: &Session) -> Result<bool> {
+    let key = tok.id.to_string();
+    if tok.password.is_some() {
+        return if let Some(serde_json::Value::Bool(true)) = session.get_value(&key).await? {
+            Ok(false)
+        } else {
+            Ok(true)
+        };
+    }
+    Ok(false)
 }

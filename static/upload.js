@@ -67,11 +67,11 @@ const loadImagePreview = inputElement => {
   });
 }
 
-function addFile(id) {
+function addFile(idx) {
   let p = document.createElement("p");
   let inputElement = document.createElement("input");
   inputElement.type = "file";
-  inputElement.name = `file_${counter}`;
+  inputElement.name = `file_${idx}`;
   // inputElement.multiple = true;
 
   p.insertAdjacentElement("afterbegin", inputElement);
@@ -91,19 +91,21 @@ const addRow = (endEl) => (_ev) => {
 }
 
 window.onload = function onload() {
+  let domElement = document.querySelector(".shown-with-js");
+  domElement.style.display = "";
+
   let p = document.createElement("p");
   let button = document.createElement("button");
   button.type = "button";
   button.innerText = "Add file";
   p.insertAdjacentElement("afterbegin", button);
-  document.querySelector("#upload-form").insertAdjacentElement("afterbegin", p);
+  // document.querySelector("#upload-form").insertAdjacentElement("afterbegin", p);
 
-  let p2 = p.cloneNode(true);
-  document.querySelector("#upload-form [type='submit']").insertAdjacentElement("beforebegin", p2);
+  document.querySelector("#upload-form [type='submit']").insertAdjacentElement("beforebegin", p);
 
-  let addRowInForm = addRow(p2);
+  let addRowInForm = addRow(p);
+  domElement.addEventListener("click", addRowInForm);
   p.addEventListener("click", addRowInForm);
-  p2.addEventListener("click", addRowInForm);
 
   addRowInForm();
 }

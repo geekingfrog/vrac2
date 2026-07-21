@@ -1,3 +1,6 @@
+use scrypt::password_hash::{PasswordHasher, PasswordVerifier};
+use scrypt::phc::PasswordHash;
+use scrypt::Scrypt;
 use sqlx::types::time::OffsetDateTime;
 use sqlx::{sqlite::SqlitePoolOptions, Executor, Pool, Sqlite};
 use std::result::Result as StdResult;
@@ -46,6 +49,9 @@ pub(crate) struct DbToken {
 
     /// an identifier for the type of storage to use for this token.
     pub(crate) backend_type: String,
+
+    /// hashed password protecting the files. Should be None for fresh tokens
+    pub(crate) password: Option<String>,
 }
 
 #[derive(Debug)]
@@ -55,6 +61,7 @@ pub(crate) struct CreateToken<'input> {
     pub(crate) valid_until: OffsetDateTime,
     pub(crate) content_expires_after_hours: Option<i64>,
     pub(crate) backend_type: &'input str,
+    pub(crate) password: Option<&'input str>,
 }
 
 #[derive(sqlx::FromRow, Debug)]
@@ -135,10 +142,24 @@ impl std::fmt::Debug for Account {
 /// it's an opaque structure that forces the user to call
 /// an init function on the db to prepare an upload
 #[must_use]
+#[derive(Debug)]
 pub(crate) struct UploadToken {
     pub(crate) id: i64,
     pub(crate) path: String,
     pub(crate) attempt_counter: i64,
+    pub(crate) password: Option<String>,
+}
+
+impl UploadToken {
+    pub(crate) fn set_password(&mut self, plain_password: &[u8]) -> Result<()> {
+        let hash: PasswordHash = Scrypt::default()
+            .hash_password(plain_password)
+            .map_err(|e| AppError::InternalError {
+                message: format!("cannot hash password: {e:?}"),
+            })?;
+        self.password = Some(hash.to_string());
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -258,8 +279,8 @@ impl DBService {
 
         let tok = sqlx::query_as::<_, DbToken>(
             "INSERT INTO token
-            (path, max_size_mib, valid_until, content_expires_after_hours, backend_type)
-            VALUES (?,?,?,?,?)
+            (path, max_size_mib, valid_until, content_expires_after_hours, backend_type, password)
+            VALUES (?,?,?,?,?,?)
             RETURNING *",
         )
         .bind(ct.path)
@@ -267,6 +288,7 @@ impl DBService {
         .bind(ct.valid_until)
         .bind(ct.content_expires_after_hours)
         .bind(ct.backend_type)
+        .bind(ct.password)
         .fetch_one(&mut *tx)
         .await
         .with_context(|| format!("cannot create token for path {}", ct.path))?;
@@ -326,6 +348,7 @@ impl DBService {
             id: token.id,
             path: token.path,
             attempt_counter: tok.attempt_counter,
+            password: None,
         })
     }
 
@@ -428,11 +451,14 @@ impl DBService {
             .content_expires_after_hours
             .map(|h| now + std::time::Duration::from_secs(3600 * (h as u64)));
 
+        tracing::debug!("setting pass? {ut:?}");
+
         let x = sqlx::query(
-            "UPDATE token SET used_at=?, content_expires_at=? WHERE id=? AND attempt_counter=?",
+            "UPDATE token SET used_at=?, content_expires_at=?, password=? WHERE id=? AND attempt_counter=?",
         )
         .bind(now)
         .bind(expires_at)
+        .bind(ut.password)
         .bind(ut.id)
         // need to add the attempt counter in the where to avoid races if two
         // concurrent uploads (vanishingly unlikely)

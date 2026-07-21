@@ -1,0 +1,2 @@
+ALTER TABLE token
+ADD COLUMN password TEXT;

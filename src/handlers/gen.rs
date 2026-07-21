@@ -105,6 +105,7 @@ async fn create_token(
         valid_until,
         content_expires_after_hours: form.content_expires_after_hours,
         backend_type,
+        password: None,
     };
 
     let r = state.db.create_token(ct).await?;
