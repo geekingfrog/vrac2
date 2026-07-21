@@ -1,4 +1,4 @@
-use scrypt::password_hash::{PasswordHasher, PasswordVerifier};
+use scrypt::password_hash::PasswordHasher;
 use scrypt::phc::PasswordHash;
 use scrypt::Scrypt;
 use sqlx::types::time::OffsetDateTime;

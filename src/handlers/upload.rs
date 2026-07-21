@@ -1,4 +1,3 @@
-use async_zip::error::ZipError;
 use async_zip::{Compression, ZipEntryBuilder};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::{routing, Form, Router};
@@ -12,7 +11,7 @@ use std::str::FromStr;
 use std::task::{Context, Poll};
 use tower_sessions::Session;
 
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Query};
+use axum::extract::{DefaultBodyLimit, FromRef, FromRequestParts, Multipart, Path, Query};
 use axum::response::{Redirect, Response};
 use axum::{extract::State, response::Html, response::IntoResponse};
 use humantime::format_duration;
@@ -113,33 +112,45 @@ pub(crate) fn router(state: AppState) -> Router<()> {
         .with_state(state)
 }
 
-// impl<S> FromRequestParts<S> for GetTokenResult
-// where
-//     S: Send + Sync,
-// {
-//     type Rejection = AppError;
-//
-//     async fn from_request_parts(
-//         parts: &mut axum::http::request::Parts,
-//         _state: &S,
-//     ) -> Result<Self> {
-//         todo!()
-//     }
-// }
+impl<S> FromRequestParts<S> for GetTokenResult
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        req_state: &S,
+    ) -> Result<Self> {
+        let State(state): State<AppState> = State::from_request_parts(parts, req_state)
+            .await
+            .map_err(|_| AppError::InternalError {
+                message: "missing state".to_string(),
+            })?;
+
+        let Path(tok_path): Path<String> = Path::from_request_parts(parts, req_state)
+            .await
+            .map_err(|_| AppError::BadRequest(None))?;
+
+        let tok_path = urlencoding::decode(&tok_path).map_err(|e| {
+            crate::error::AppError::InvalidUrlToken {
+                token: tok_path.clone(),
+                source: e,
+            }
+        })?;
+
+        state.db.get_valid_token(&tok_path).await
+    }
+}
 
 async fn get_upload_form(
     state: State<AppState>,
-    Path(tok_path): Path<String>,
     session: Session,
+    token: GetTokenResult,
     Query(file_query): Query<FileQuery>,
 ) -> Result<Response> {
-    let tok_path =
-        urlencoding::decode(&tok_path).map_err(|e| crate::error::AppError::InvalidUrlToken {
-            token: tok_path.clone(),
-            source: e,
-        })?;
-
-    match state.db.get_valid_token(&tok_path).await? {
+    match token {
         GetTokenResult::NotFound => {
             let html: Html<String> = state
                 .get_templates()
@@ -161,19 +172,11 @@ async fn get_upload_form(
 }
 
 async fn post_upload_form(
-    Path(tok_path): Path<String>,
+    token: GetTokenResult,
     state: State<AppState>,
     mut multipart: Multipart,
 ) -> Result<Response> {
-    // TODO: maybe make a custom extractor for the token which handles the
-    // urldecoding itself to reduce duplication?
-    let tok_path =
-        urlencoding::decode(&tok_path).map_err(|e| crate::error::AppError::InvalidUrlToken {
-            token: tok_path.clone(),
-            source: e,
-        })?;
-
-    let token = match state.db.get_valid_token(&tok_path).await? {
+    let token = match token {
         GetTokenResult::Fresh(t) => t,
         GetTokenResult::NotFound | GetTokenResult::Used(_) => {
             let not_found = state
@@ -194,6 +197,7 @@ async fn post_upload_form(
             ));
         };
 
+    let token_url = token.get_url();
     let mut token = state.db.initiate_upload(token).await?;
 
     let mut total_bytes = 0;
@@ -279,7 +283,7 @@ async fn post_upload_form(
 
     // TODO: maybe use https://docs.rs/axum/0.6.0-rc.4/axum/extract/struct.OriginalUri.html
     // instead of reconstructing the path here
-    Ok(Redirect::to(&format!("/f/{}", tok_path)).into_response())
+    Ok(Redirect::to(&token_url).into_response())
 }
 
 async fn upload_form(state: State<AppState>, tok: DbToken) -> Result<Response> {
@@ -365,24 +369,6 @@ async fn render_files(state: State<AppState>, tok: DbToken) -> Result<Response> 
     Ok(html.into_response())
 }
 
-trait IntoIOError {
-    // fn into_io_error<E: std::error::Error + Send + Sync + 'static>(self: E) -> std::io::Error;
-    fn into_io_error(self) -> std::io::Error;
-}
-
-impl IntoIOError for ZipError {
-    fn into_io_error(self) -> std::io::Error {
-        std::io::Error::new(std::io::ErrorKind::Other, self)
-    }
-}
-
-impl IntoIOError for crate::error::AppError {
-    fn into_io_error(self) -> std::io::Error {
-        tracing::error!("app error into IoError {:?}", self);
-        std::io::Error::new(std::io::ErrorKind::Other, self)
-    }
-}
-
 async fn get_files_zip(state: State<AppState>, tok: DbToken) -> Result<Response> {
     tracing::debug!("getting zip files for {tok:?}");
     let files = state.db.get_files(tok.id, tok.attempt_counter).await?;
@@ -429,12 +415,17 @@ where
             .await?;
         let filename = file.name.unwrap_or_else(|| format!("{}", file.id));
         let opts = ZipEntryBuilder::new(filename.clone().into(), Compression::Deflate);
-        let mut entry = zip_wrt
-            .write_entry_stream(opts)
-            .await
-            .map_err(|e| e.into_io_error())?;
+        let mut entry =
+            zip_wrt
+                .write_entry_stream(opts)
+                .await
+                .map_err(|e| AppError::InternalError {
+                    message: format!("{e:?}"),
+                })?;
         let bytes = futures::io::copy(blob.compat(), &mut entry).await?;
-        entry.close().await.map_err(|e| e.into_io_error())?;
+        entry.close().await.map_err(|e| AppError::InternalError {
+            message: format!("{e:?}"),
+        })?;
         tracing::debug!("done writing {bytes} bytes to entry {:?}", filename);
     }
 
@@ -481,15 +472,9 @@ async fn file_password_get(
     state: State<AppState>,
     messages: Messages,
     session: Session,
-    Path(tok_path): Path<String>,
+    token: GetTokenResult,
 ) -> Result<Response> {
-    let tok_path =
-        urlencoding::decode(&tok_path).map_err(|e| crate::error::AppError::InvalidUrlToken {
-            token: tok_path.clone(),
-            source: e,
-        })?;
-
-    let token = match state.db.get_valid_token(&tok_path).await? {
+    let token = match token {
         GetTokenResult::Fresh(t) => return Ok(Redirect::to(&t.get_url()).into_response()),
         GetTokenResult::NotFound => {
             let not_found = state
@@ -521,16 +506,10 @@ async fn file_password_post(
     state: State<AppState>,
     session: Session,
     messages: Messages,
-    Path(tok_path): Path<String>,
+    token_result: GetTokenResult,
     Form(file_password): Form<FilePasswordForm>,
 ) -> Result<Response> {
-    let tok_path =
-        urlencoding::decode(&tok_path).map_err(|e| crate::error::AppError::InvalidUrlToken {
-            token: tok_path.clone(),
-            source: e,
-        })?;
-
-    let token = match state.db.get_valid_token(&tok_path).await? {
+    let token = match token_result {
         GetTokenResult::Fresh(t) => return Ok(Redirect::to(&t.get_url()).into_response()),
         GetTokenResult::NotFound => {
             let not_found = state

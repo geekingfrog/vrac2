@@ -73,6 +73,9 @@ pub enum AppError {
         source: Box<AppError>,
     },
 
+    #[error("bad request")]
+    BadRequest(Option<String>),
+
     #[error("Internal error")]
     InternalError { message: String },
 }
@@ -90,6 +93,8 @@ impl IntoResponse for AppError {
                 tracing::error!("DB error: {self:?}");
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{self:?}")).into_response()
             }
+            AppError::BadRequest(None) => StatusCode::BAD_REQUEST.into_response(),
+            AppError::BadRequest(Some(msg)) => (StatusCode::BAD_REQUEST, msg).into_response(),
             AppError::InternalError { message } => {
                 (StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
             }
